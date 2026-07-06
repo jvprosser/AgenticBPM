@@ -120,6 +120,7 @@ proposed/deployed agents.**
    - **Layout resolution:** check for **Diagram Interchange** (`bpmndi:BPMNDiagram`) coordinates and use them when present.
    - **Fallback (required — `Claims_process.xml` ships *no* DI section):** apply a deterministic **"dumb cascade"** staggered X/Y assignment by walking the sequence flows (a layered/topological auto-layout is a stretch refinement).
    - **Element coverage (per the reference file):** events (`startEvent`, `endEvent`, `boundaryEvent` + timer), tasks (`serviceTask`, `userTask`, `businessRuleTask`), gateways (`exclusiveGateway`, `parallelGateway`), `subProcess` with nested children, plus `collaboration`/`participant` (pool) and `laneSet`/`lane`.
+   - **Namespace caveat:** `Claims_process.xml` uses placeholder namespace URIs (`http://omg.org` for `bpmn`, `bpmndi`, `dc`, `di`) rather than the real OMG BPMN 2.0 URIs. A strict namespace-aware parser will choke on this — the parser must match on **local element names** (or tolerate arbitrary namespace URIs) instead of hard-coding the canonical OMG namespaces.
    - Persist to SQLite incl. `raw_xml` provenance → *verify:* DB contains nodes with **distinct X/Y coordinates** ready for the React canvas.
 3. **[Constrained Editor]** Render canvas from SQLite; drag-and-drop → *verify:* drag-**end** triggers debounced X/Y write.
 4. **[Agentic Underlay]** Bounding-box grouping → *verify:* selected nodes get one `group_id`; group row created (may cross lanes).
