@@ -15,3 +15,16 @@ dist/
 
 # Undo-tree save-files
 *.~undo-tree
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# App data (uploaded files, local SQLite)
+data/
+*.sqlite
+*.db
