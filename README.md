@@ -101,5 +101,9 @@ curl -F "file=@docs/Claims_process.xml" http://localhost:8000/api/upload
   Application (notebook cell) and as a plain `python backend/main.py` process. The call
   blocks (`thread.join()`), which is the expected behavior for a long-running server.
 - **`No module named 'app'`** — the entrypoint adds its own directory to `sys.path`, so
-  it imports the `app` package from any working directory. If you invoke it another way,
-  run from `backend/` or set `PYTHONPATH=backend`.
+  it imports the `app` package from any working directory. If `__file__` is undefined
+  (pasted into a cell) it falls back to `./backend`; override with `BACKEND_DIR=...`.
+- **`[Errno 98] address already in use`** — the CML kernel is long-lived, so a previous
+  `run()` left a uvicorn server bound to the port. The entrypoint now stops any prior
+  server (tracked on the cached `config` module, so it survives full cell re-runs) and
+  waits for the port to free before rebinding. Restarting the kernel also clears it.
