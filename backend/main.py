@@ -2,22 +2,21 @@
 
 Binds CDSW_APP_PORT when running as a Cloudera AI Application; 8000 locally.
 
-Cloudera AI Applications execute this script inside a notebook/IPython kernel that
-already owns a running asyncio event loop, so we always serve uvicorn on a dedicated
-thread with its own fresh event loop.
+Cloudera AI Applications execute this script inside a notebook/IPython kernel. Rather
+than starting uvicorn in that kernel (asyncio/event-loop conflicts), we spawn uvicorn
+as a **child process** with ``subprocess.Popen`` — the same pattern used for
+``streamlit run`` in CML Applications.
 
-Re-running the entrypoint cell must not attempt a second bind on the same port. If our
-server is already healthy, we attach to the existing thread (no-op restart). Otherwise
-we stop any prior instance and wait until the port is actually free before binding.
+Re-running the entrypoint cell must not start a second server on the same port. If our
+server is already healthy, we attach to the existing subprocess (no-op restart).
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import socket
+import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,16 +28,16 @@ try:
 except NameError:
     _cwd = os.getcwd()
     _BACKEND_DIR = _cwd if os.path.basename(_cwd) == "backend" else os.path.join(_cwd, "backend")
-_BACKEND_DIR = os.environ.get("BACKEND_DIR", _BACKEND_DIR)
-if _BACKEND_DIR not in sys.path:
-    sys.path.insert(0, _BACKEND_DIR)
+BACKEND_DIR = os.environ.get("BACKEND_DIR", _BACKEND_DIR)
 
-import uvicorn  # noqa: E402  (import after sys.path fix)
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
-from app import config  # noqa: E402
+from app import config  # noqa: E402  (import after sys.path fix)
 
 _SHUTDOWN_TIMEOUT_S = 30.0
 _PORT_FREE_TIMEOUT_S = 20.0
+_STARTUP_TIMEOUT_S = 15.0
 
 
 def _probe_host(host: str) -> str:
@@ -69,45 +68,57 @@ def _wait_port_free(host: str, port: int, timeout: float) -> bool:
     return False
 
 
+def _proc_alive() -> bool:
+    proc = config._pm_proc
+    return proc is not None and proc.poll() is None
+
+
 def _already_running() -> bool:
-    thread = config._pm_thread
-    if thread is None or not thread.is_alive():
-        return False
-    return _health_ok(config.APP_HOST, config.APP_PORT)
+    return _proc_alive() and _health_ok(config.APP_HOST, config.APP_PORT)
 
 
 def _stop_existing() -> None:
-    """Stop a server started by a previous run in this (persistent) kernel."""
-    server = config._pm_server
-    thread = config._pm_thread
-    if server is not None:
-        server.should_exit = True
-    if thread is not None and thread.is_alive():
-        thread.join(timeout=_SHUTDOWN_TIMEOUT_S)
-        if thread.is_alive():
-            raise RuntimeError(
-                f"Previous server thread did not stop within {_SHUTDOWN_TIMEOUT_S:.0f}s. "
-                f"Restart the CML kernel to free port {config.APP_PORT}."
-            )
-    config._pm_server = None
-    config._pm_thread = None
+    """Stop a uvicorn subprocess started by a previous run in this kernel."""
+    proc = config._pm_proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=_SHUTDOWN_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    config._pm_proc = None
     if not _wait_port_free(config.APP_HOST, config.APP_PORT, _PORT_FREE_TIMEOUT_S):
         raise RuntimeError(
             f"Port {config.APP_PORT} is still in use after shutdown. "
-            "Another process may hold it — restart the CML kernel, or stop the "
-            "other Application using this port."
+            "Restart the CML kernel, or stop the other Application using this port."
         )
 
 
+def _uvicorn_cmd() -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        config.APP_HOST,
+        "--port",
+        str(config.APP_PORT),
+        "--log-level",
+        "info",
+    ]
+
+
 def run() -> None:
-    """Start the API server on a dedicated thread and block until it stops."""
+    """Spawn uvicorn in a subprocess and block until it exits."""
     if _already_running():
         print(
             f"Process Mapper already serving on port {config.APP_PORT} "
             f"(re-run attaches to the running server; no restart)."
         )
         try:
-            config._pm_thread.join()
+            config._pm_proc.wait()
         except KeyboardInterrupt:
             _stop_existing()
         return
@@ -122,43 +133,34 @@ def run() -> None:
 
     _stop_existing()
 
-    server = uvicorn.Server(
-        uvicorn.Config(
-            "app.main:app",
-            host=config.APP_HOST,
-            port=config.APP_PORT,
-            log_level="info",
-            timeout_graceful_shutdown=10,
-        )
+    proc = subprocess.Popen(
+        _uvicorn_cmd(),
+        cwd=BACKEND_DIR,
+        env=os.environ.copy(),
     )
-    thread = threading.Thread(
-        target=lambda: asyncio.run(server.serve()),
-        name="uvicorn",
-        daemon=True,
-    )
-    config._pm_server = server
-    config._pm_thread = thread
-    thread.start()
+    config._pm_proc = proc
 
-    # Give uvicorn a moment to bind before we declare success.
-    deadline = time.time() + 10
+    deadline = time.time() + _STARTUP_TIMEOUT_S
     while time.time() < deadline:
-        if not thread.is_alive():
+        code = proc.poll()
+        if code is not None:
             raise RuntimeError(
-                f"Server failed to start on port {config.APP_PORT}. "
-                "Check logs above for bind errors (e.g. address already in use)."
+                f"Uvicorn exited during startup (code {code}). "
+                "Check stderr above for bind errors (e.g. address already in use)."
             )
         if _health_ok(config.APP_HOST, config.APP_PORT):
-            print(f"Process Mapper serving on port {config.APP_PORT}")
+            print(f"Process Mapper serving on port {config.APP_PORT} (pid {proc.pid})")
             break
         time.sleep(0.2)
     else:
+        _stop_existing()
         raise RuntimeError(
-            f"Server thread started but /health did not respond on port {config.APP_PORT}."
+            f"Uvicorn started (pid {proc.pid}) but /health did not respond "
+            f"within {_STARTUP_TIMEOUT_S:.0f}s on port {config.APP_PORT}."
         )
 
     try:
-        thread.join()
+        proc.wait()
     except KeyboardInterrupt:
         _stop_existing()
 

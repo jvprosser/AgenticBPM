@@ -94,18 +94,12 @@ curl -F "file=@docs/Claims_process.xml" http://localhost:8000/api/upload
 
 ### Troubleshooting
 
-- **`asyncio.run() cannot be called from a running event loop`** — CML Applications
-  execute the entry script inside a notebook/IPython kernel that already owns a running
-  asyncio loop. `backend/main.py` handles this by **always** serving uvicorn on a
-  dedicated thread with its own fresh event loop, so it runs correctly both as a CML
-  Application (notebook cell) and as a plain `python backend/main.py` process. The call
-  blocks (`thread.join()`), which is the expected behavior for a long-running server.
-- **`No module named 'app'`** — the entrypoint adds its own directory to `sys.path`, so
-  it imports the `app` package from any working directory. If `__file__` is undefined
-  (pasted into a cell) it falls back to `./backend`; override with `BACKEND_DIR=...`.
-- **`[Errno 98] address already in use`** — the CML kernel is long-lived. Re-running the
-  entrypoint cell used to start a second server on the same port. `run()` now detects an
-  already-healthy server and **attaches to it** (no second bind). If the port is held by
-  something else, you get a clear error — restart the kernel or stop the other process.
-  To force a restart from a notebook cell, interrupt the running cell first, then run
-  again (or restart the kernel).
+- **`asyncio.run() cannot be called from a running event loop`** — CML Applications run
+  inside a notebook kernel. `backend/main.py` spawns uvicorn as a **child subprocess**
+  (`python -m uvicorn …`), so the server runs outside the kernel's event loop entirely.
+- **`No module named 'app'`** — the entrypoint sets `BACKEND_DIR` / `sys.path` and runs
+  uvicorn with `cwd=backend/`. Override with `BACKEND_DIR=...` if your layout differs.
+- **`[Errno 98] address already in use`** — re-running the entrypoint cell used to start
+  a second server. `run()` now detects an already-healthy server and **attaches** to the
+  existing subprocess (no second bind). To force a restart, interrupt the cell or restart
+  the kernel first.
