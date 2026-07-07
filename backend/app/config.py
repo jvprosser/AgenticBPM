@@ -36,6 +36,11 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 
 ALLOWED_SUFFIXES = {".xml", ".bpmn", ".bpmn20.xml", ".xpdl"}
 
+# Runtime handles for the uvicorn thread (set by backend/main.py). Stored here so they
+# survive notebook cell re-runs — imported modules are not re-executed.
+_pm_server = None
+_pm_thread = None
+
 
 def ensure_dirs() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
