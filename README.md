@@ -103,7 +103,9 @@ curl -F "file=@docs/Claims_process.xml" http://localhost:8000/api/upload
 - **`No module named 'app'`** — the entrypoint adds its own directory to `sys.path`, so
   it imports the `app` package from any working directory. If `__file__` is undefined
   (pasted into a cell) it falls back to `./backend`; override with `BACKEND_DIR=...`.
-- **`[Errno 98] address already in use`** — the CML kernel is long-lived, so a previous
-  `run()` left a uvicorn server bound to the port. The entrypoint now stops any prior
-  server (tracked on the cached `config` module, so it survives full cell re-runs) and
-  waits for the port to free before rebinding. Restarting the kernel also clears it.
+- **`[Errno 98] address already in use`** — the CML kernel is long-lived. Re-running the
+  entrypoint cell used to start a second server on the same port. `run()` now detects an
+  already-healthy server and **attaches to it** (no second bind). If the port is held by
+  something else, you get a clear error — restart the kernel or stop the other process.
+  To force a restart from a notebook cell, interrupt the running cell first, then run
+  again (or restart the kernel).
