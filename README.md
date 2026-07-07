@@ -78,11 +78,12 @@ curl -F "file=@docs/Claims_process.xml" http://localhost:8000/api/upload
 ## Deploying as a Cloudera AI Application
 
 1. Push this repo into a Cloudera AI (CML) Project.
-2. In a session/job, install deps and build the frontend:
+2. In a **Session**, run the one-command build (installs Node into `$HOME` — no root
+   needed — builds the frontend, and installs backend deps):
    ```bash
-   pip install -r backend/requirements.txt
-   cd frontend && npm install && npm run build
+   bash scripts/cml_build.sh
    ```
+   (Override the Node version with `NODE_VERSION=v22.x.x bash scripts/cml_build.sh`.)
 3. Create an **Application** with:
    - **Script / command:** `python backend/main.py`
    - The app binds `CDSW_APP_PORT` automatically and listens on `0.0.0.0`.
