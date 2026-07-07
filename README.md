@@ -91,3 +91,15 @@ curl -F "file=@docs/Claims_process.xml" http://localhost:8000/api/upload
 
 > Single-replica by design (embedded SQLite in project storage, later steps). Do not
 > scale the Application horizontally.
+
+### Troubleshooting
+
+- **`asyncio.run() cannot be called from a running event loop`** — CML Applications
+  execute the entry script inside a notebook/IPython kernel that already owns a running
+  asyncio loop. `backend/main.py` handles this by **always** serving uvicorn on a
+  dedicated thread with its own fresh event loop, so it runs correctly both as a CML
+  Application (notebook cell) and as a plain `python backend/main.py` process. The call
+  blocks (`thread.join()`), which is the expected behavior for a long-running server.
+- **`No module named 'app'`** — the entrypoint adds its own directory to `sys.path`, so
+  it imports the `app` package from any working directory. If you invoke it another way,
+  run from `backend/` or set `PYTHONPATH=backend`.
