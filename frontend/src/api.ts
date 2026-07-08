@@ -18,8 +18,22 @@ export interface GraphNode {
   x: number;
   y: number;
   lane_id: string | null;
+  group_id: string | null;
   parent_ref: string | null;
   attached_to_ref: string | null;
+}
+
+export interface BboxGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface GraphGroup {
+  id: string;
+  bbox: BboxGeometry | null;
+  deployment_status: string;
 }
 
 export interface GraphEdge {
@@ -40,6 +54,15 @@ export interface ProcessGraph {
   lanes: GraphLane[];
   nodes: GraphNode[];
   edges: GraphEdge[];
+  groups: GraphGroup[];
+}
+
+export interface CreateGroupResult {
+  id: string;
+  process_id: string;
+  node_ids: string[];
+  bbox: BboxGeometry;
+  deployment_status: string;
 }
 
 export interface HealthResult {
@@ -93,4 +116,18 @@ export async function updateNodePosition(
     }
   );
   if (!res.ok) throw new Error(await parseError(res, "Failed to save position"));
+}
+
+export async function createGroup(
+  processId: string,
+  nodeIds: string[],
+  bbox?: BboxGeometry
+): Promise<CreateGroupResult> {
+  const res = await fetch(`/api/processes/${processId}/groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_ids: nodeIds, bbox: bbox ?? null }),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to create group"));
+  return res.json();
 }

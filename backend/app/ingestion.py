@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from . import parser
+from .groups import list_groups
 from .layout import apply_cascade_layout
 
 
@@ -109,7 +110,8 @@ def get_graph(conn: sqlite3.Connection, process_id: str) -> dict | None:
         (process_id,),
     ).fetchall()
     nodes = conn.execute(
-        "SELECT id, source_ref, type, label, x, y, lane_id, parent_ref, attached_to_ref "
+        "SELECT id, source_ref, type, label, x, y, lane_id, group_id, "
+        "parent_ref, attached_to_ref "
         "FROM node WHERE process_id = ?",
         (process_id,),
     ).fetchall()
@@ -123,6 +125,7 @@ def get_graph(conn: sqlite3.Connection, process_id: str) -> dict | None:
         "lanes": [dict(r) for r in lanes],
         "nodes": [dict(r) for r in nodes],
         "edges": [dict(r) for r in edges],
+        "groups": list_groups(conn, process_id),
     }
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, ingestion
+from . import config, db, groups, ingestion
 
 config.ensure_dirs()
 db.init_db()
@@ -121,6 +122,40 @@ def update_node_position(process_id: str, node_id: str, pos: NodePosition) -> di
     if not ok:
         raise HTTPException(status_code=404, detail="Node not found for this process.")
     return {"node_id": node_id, "x": pos.x, "y": pos.y}
+
+
+class BboxGeometry(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class CreateGroupRequest(BaseModel):
+    node_ids: list[str]
+    bbox: Optional[BboxGeometry] = None
+
+
+@app.post("/api/processes/{process_id}/groups", tags=["groups"])
+def create_group(process_id: str, body: CreateGroupRequest) -> dict:
+    """Step 4 [Agentic Underlay]: bounding-box group — assign nodes to one group."""
+    bbox = body.bbox.model_dump() if body.bbox else None
+    try:
+        with db.get_conn() as conn:
+            if ingestion.get_graph(conn, process_id) is None:
+                raise HTTPException(status_code=404, detail="Process not found.")
+            return groups.create_group(conn, process_id, body.node_ids, bbox)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/processes/{process_id}/groups/{group_id}", tags=["groups"])
+def delete_group(process_id: str, group_id: str) -> dict:
+    with db.get_conn() as conn:
+        ok = groups.delete_group(conn, process_id, group_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Group not found.")
+    return {"deleted": group_id}
 
 
 # --- Static frontend (served only when a build exists) -----------------------

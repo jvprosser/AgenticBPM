@@ -151,6 +151,31 @@ body {
   border-color: var(--accent);
 }
 
+.btn--active {
+  border-color: var(--accent);
+  background: #1b2a38;
+}
+
+.btn--accent {
+  border-color: #a855f7;
+  color: #e9d5ff;
+}
+
+.btn--accent:hover:not(:disabled) {
+  border-color: #c084fc;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.canvas-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0 0 0.5rem;
+}
+
 .save-pill {
   font-size: 0.78rem;
   min-width: 96px;
@@ -194,6 +219,30 @@ body {
 
 .bpmn-node.is-selected {
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+.bpmn-node--grouped {
+  box-shadow: 0 0 0 2px #a855f7;
+}
+
+.group-overlay {
+  border: 2px dashed #a855f7;
+  border-radius: 12px;
+  background: rgba(168, 85, 247, 0.08);
+  pointer-events: none;
+  position: relative;
+}
+
+.group-overlay__label {
+  position: absolute;
+  top: -1.4rem;
+  left: 0.5rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #c084fc;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .bpmn-node__type {

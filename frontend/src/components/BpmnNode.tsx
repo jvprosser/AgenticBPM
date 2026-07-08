@@ -7,6 +7,7 @@ export interface BpmnNodeData {
   bpmnType: string;
   category: BpmnCategory;
   lane: string | null;
+  groupId: string | null;
   [key: string]: unknown;
 }
 
@@ -34,7 +35,9 @@ export default function BpmnNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`bpmn-node bpmn-node--${d.category}${selected ? " is-selected" : ""}`}
+      className={`bpmn-node bpmn-node--${d.category}${selected ? " is-selected" : ""}${
+        d.groupId ? " bpmn-node--grouped" : ""
+      }`}
       style={{
         borderColor: color,
         borderRadius: isEvent ? 999 : isGateway ? 6 : 8,

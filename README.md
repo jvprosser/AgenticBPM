@@ -22,6 +22,10 @@ Implemented so far (per the blueprint execution plan):
   category-colored BPMN nodes and **locked topology** (no connect/delete; drag-to-
   reposition only). Drag-end persists X/Y back to SQLite via
   `PATCH /api/processes/{id}/nodes/{node_id}/position`, debounced per node (~250ms).
+- **Step 4 — Agentic Underlay:** box-select nodes on the canvas → **Create agentic
+  group** persists a `group` row and assigns a single `group_id` to each selected node
+  (many-to-one; may span lanes). Purple dashed bounding-box overlays render from stored
+  `bbox_geometry`.
 
 ## Architecture
 
@@ -66,6 +70,8 @@ cd frontend && npm run dev
 | GET | `/api/processes` | List ingested processes. |
 | GET | `/api/processes/{id}` | Full graph (nodes with X/Y, edges, lanes) for the canvas. |
 | PATCH | `/api/processes/{id}/nodes/{node_id}/position` | Persist a dragged node's X/Y. |
+| POST | `/api/processes/{id}/groups` | Create agentic underlay group (node_ids + optional bbox). |
+| DELETE | `/api/processes/{id}/groups/{group_id}` | Remove a group and clear node membership. |
 | GET | `/docs` | Auto-generated OpenAPI docs. |
 
 Quick check:
