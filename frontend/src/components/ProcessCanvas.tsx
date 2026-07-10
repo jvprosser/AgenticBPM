@@ -16,8 +16,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   createGroup,
+  getDiscovery,
   getProcessGraph,
+  suggestOptimization,
   updateNodePosition,
+  type BboxGeometry,
+  type DiscoveryResult,
+  type GraphGroup,
   type MetadataRecord,
   type ProcessGraph,
 } from "../api";
@@ -36,32 +41,63 @@ const EMPTY_META: MetadataRecord = {
 const nodeTypes = { bpmn: BpmnNode, groupOverlay: GroupOverlay };
 const SAVE_DEBOUNCE_MS = 250;
 const GROUP_PAD = 20;
+const NODE_W = 180;
+const NODE_H = 80;
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+
+function bboxFromNodeIds(
+  graph: ProcessGraph,
+  nodeIds: string[],
+  pad = GROUP_PAD
+): BboxGeometry | null {
+  const members = graph.nodes.filter((n) => nodeIds.includes(n.id));
+  if (!members.length) return null;
+  const xs = members.map((m) => m.x);
+  const ys = members.map((m) => m.y);
+  return {
+    x: Math.min(...xs) - pad,
+    y: Math.min(...ys) - pad,
+    width: Math.max(...xs) - Math.min(...xs) + NODE_W + pad * 2,
+    height: Math.max(...ys) - Math.min(...ys) + NODE_H + pad * 2,
+  };
+}
+
+function resolveGroupBbox(graph: ProcessGraph, group: GraphGroup): BboxGeometry | null {
+  if (group.deployment_status === "proposed" && group.node_ids?.length) {
+    return bboxFromNodeIds(graph, group.node_ids);
+  }
+  return group.bbox;
+}
 
 function toFlow(graph: ProcessGraph): { nodes: Node[]; edges: Edge[] } {
   const laneLabel = new Map(
     graph.lanes.map((l) => [l.id, l.label ?? l.source_ref])
   );
 
-  const overlayNodes: Node[] = (graph.groups ?? [])
-    .filter((g) => g.bbox)
-    .map((g) => ({
+  const overlayNodes: Node[] = [];
+  for (const g of graph.groups ?? []) {
+    const bbox = resolveGroupBbox(graph, g);
+    if (!bbox) continue;
+    const isProposed = g.deployment_status === "proposed";
+    overlayNodes.push({
       id: `overlay:${g.id}`,
       type: "groupOverlay",
-      position: { x: g.bbox!.x, y: g.bbox!.y },
+      position: { x: bbox.x, y: bbox.y },
       data: {
-        width: g.bbox!.width,
-        height: g.bbox!.height,
-        label: `Agentic underlay · ${g.deployment_status}`,
+        width: bbox.width,
+        height: bbox.height,
+        label: isProposed ? "AI Suggestion" : `Agentic underlay · ${g.deployment_status}`,
         groupId: g.id,
+        isProposed,
       },
       draggable: false,
       selectable: true,
       connectable: false,
       focusable: false,
       zIndex: 0,
-    }));
+    });
+  }
 
   const bpmnNodes: Node[] = graph.nodes.map((n) => ({
     id: n.id,
@@ -108,8 +144,17 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
   const [groupError, setGroupError] = useState<string | null>(null);
   const [graph, setGraph] = useState<ProcessGraph | null>(null);
   const [metaTarget, setMetaTarget] = useState<MetadataTarget | null>(null);
+  const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    getDiscovery()
+      .then(setDiscovery)
+      .catch(() => setDiscovery({ discovery_active: false } as DiscoveryResult));
+  }, []);
 
   const loadGraph = useCallback(async () => {
     const g = await getProcessGraph(processId);
@@ -181,6 +226,65 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
     }
   }, [selectedIds, nodes, processId, loadGraph]);
 
+  const handleSuggest = useCallback(async () => {
+    setSuggestBusy(true);
+    setSuggestError(null);
+    try {
+      const result = await suggestOptimization(processId);
+      await loadGraph();
+      const memberNodes = nodes.filter(
+        (n) => n.type === "bpmn" && result.node_ids.includes(n.id)
+      );
+      if (memberNodes.length > 0) {
+        const bounds = getNodesBounds(memberNodes);
+        const computed: BboxGeometry = {
+          x: bounds.x - GROUP_PAD,
+          y: bounds.y - GROUP_PAD,
+          width: bounds.width + GROUP_PAD * 2,
+          height: bounds.height + GROUP_PAD * 2,
+        };
+        setNodes((prev) =>
+          prev.map((n) => {
+            if (n.id !== `overlay:${result.group_id}`) return n;
+            return {
+              ...n,
+              position: { x: computed.x, y: computed.y },
+              data: {
+                ...n.data,
+                width: computed.width,
+                height: computed.height,
+                label: "AI Suggestion",
+                isProposed: true,
+              },
+            };
+          })
+        );
+      }
+    } catch (e) {
+      setSuggestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSuggestBusy(false);
+    }
+  }, [processId, loadGraph, nodes, setNodes]);
+
+  const openGroupTarget = useCallback(
+    (groupId: string, variant: "default" | "proposed") => {
+      const gg = graph?.groups.find((g) => g.id === groupId);
+      if (!gg) return;
+      setMetaTarget({
+        ownerType: "group",
+        ownerId: groupId,
+        title:
+          variant === "proposed"
+            ? `AI Suggestion · ${gg.workflow_definition?.workflow_name ?? "proposed"}`
+            : `Agentic group · ${gg.deployment_status}`,
+        variant,
+        rationale: gg.workflow_definition?.rationale ?? gg.metadata.description ?? undefined,
+      });
+    },
+    [graph]
+  );
+
   const onNodeClick = useCallback(
     (_evt: React.MouseEvent, node: Node) => {
       if (selectMode) return;
@@ -195,14 +299,24 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         const groupId = (node.data as { groupId?: string }).groupId;
         if (!groupId) return;
         const gg = graph?.groups.find((g) => g.id === groupId);
-        setMetaTarget({
-          ownerType: "group",
-          ownerId: groupId,
-          title: `Agentic group · ${gg?.deployment_status ?? "group"}`,
-        });
+        if (gg?.deployment_status === "proposed") return;
+        openGroupTarget(groupId, "default");
       }
     },
-    [selectMode, graph]
+    [selectMode, graph, openGroupTarget]
+  );
+
+  const onNodeContextMenu = useCallback(
+    (evt: React.MouseEvent, node: Node) => {
+      if (node.type !== "groupOverlay") return;
+      const groupId = (node.data as { groupId?: string }).groupId;
+      if (!groupId) return;
+      const gg = graph?.groups.find((g) => g.id === groupId);
+      if (gg?.deployment_status !== "proposed") return;
+      evt.preventDefault();
+      openGroupTarget(groupId, "proposed");
+    },
+    [graph, openGroupTarget]
   );
 
   const metaInitial = useMemo((): MetadataRecord => {
@@ -273,6 +387,14 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
             ? "Creating…"
             : `Create agentic group (${selectedIds.length})`}
         </button>
+        <button
+          className="btn btn--suggest"
+          disabled={suggestBusy}
+          onClick={() => void handleSuggest()}
+          title="Generate AI optimization proposal for high-duration tasks"
+        >
+          {suggestBusy ? "Analyzing…" : "Suggest optimization"}
+        </button>
         <span className="canvas-meta">
           {meta?.filename} · {counts.nodes} nodes · {counts.edges} edges ·{" "}
           {counts.lanes} lanes · {counts.groups} groups
@@ -280,6 +402,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         <span className={`save-pill save-pill--${saveState}`}>{saveLabel}</span>
       </div>
       {groupError && <div className="alert alert--error">{groupError}</div>}
+      {suggestError && <div className="alert alert--error">{suggestError}</div>}
       {selectMode && (
         <p className="canvas-hint">
           Drag a rectangle over nodes to select them, then click Create agentic group.
@@ -287,7 +410,16 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         </p>
       )}
       {!selectMode && !metaTarget && (
-        <p className="canvas-hint">Click a node or agentic group overlay to edit metadata.</p>
+        <p className="canvas-hint">
+          Click a node or group for metadata. Right-click an amber AI Suggestion overlay for
+          rationale.
+        </p>
+      )}
+      {discovery && !discovery.discovery_active && (
+        <div className="sandbox-banner" role="status">
+          ⚠️ Demo Sandbox Mode: Cloudera Agent Studio discovery unreachable. Using baseline
+          enterprise templates.
+        </div>
       )}
       <div className="canvas-layout">
         <div className="canvas">
@@ -298,6 +430,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
             onNodesChange={onNodesChange}
             onNodeDragStop={onNodeDragStop}
             onNodeClick={onNodeClick}
+            onNodeContextMenu={onNodeContextMenu}
             onSelectionChange={onSelectionChange}
             selectionOnDrag={selectMode}
             panOnDrag={!selectMode}

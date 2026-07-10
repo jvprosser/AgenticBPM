@@ -11,13 +11,13 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Cookie, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, groups, ingestion, metadata as metadata_svc
+from . import config, db, discovery, groups, ingestion, metadata as metadata_svc, suggest
 
 config.ensure_dirs()
 db.init_db()
@@ -172,6 +172,41 @@ class MetadataUpsertRequest(BaseModel):
     owner_type: Literal["node", "group"]
     owner_id: str
     metadata: MetadataPayload
+
+
+@app.get("/api/discovery", tags=["discovery"])
+async def get_discovery(
+    _cdswuserstoken: Optional[str] = Cookie(None),
+    authorization: Optional[str] = Header(None),
+) -> discovery.DiscoveryResponse:
+    """Step 5b [Discovery Auth Passthrough]: platform capability matrix with sandbox fallback."""
+    token: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip() or None
+    if not token:
+        token = _cdswuserstoken
+    return await discovery.fetch_platform_capabilities(token)
+
+
+@app.post("/api/processes/{process_id}/suggest", tags=["agentic"])
+async def suggest_optimization(
+    process_id: str,
+    _cdswuserstoken: Optional[str] = Cookie(None),
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """Step 5c [Draft Optimization]: infer, validate, and persist a proposed agentic group."""
+    token: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip() or None
+    if not token:
+        token = _cdswuserstoken
+    try:
+        with db.get_conn() as conn:
+            return await suggest.generate_suggestion(conn, process_id, token)
+    except ValueError as exc:
+        msg = str(exc)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
 
 
 @app.patch("/api/processes/{process_id}/metadata", tags=["metadata"])

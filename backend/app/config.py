@@ -36,6 +36,12 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 
 ALLOWED_SUFFIXES = {".xml", ".bpmn", ".bpmn20.xml", ".xpdl"}
 
+# Cloudera Agent Studio gRPC-over-JSON base URL for Step 5b discovery.
+DISCOVERY_BASE_URL = os.environ.get(
+    "DISCOVERY_BASE_URL",
+    "https://cai-agent-studio-z516vb.ml-dbfc64d1-783.go01-dem.ylcu-atmi.cloudera.site",
+)
+
 # Runtime handle for the uvicorn subprocess (set by backend/main.py). Stored here so it
 # survives notebook cell re-runs — imported modules are not re-executed.
 _pm_proc = None

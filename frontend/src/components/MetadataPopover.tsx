@@ -10,6 +10,8 @@ export interface MetadataTarget {
   ownerType: "node" | "group";
   ownerId: string;
   title: string;
+  variant?: "default" | "proposed";
+  rationale?: string;
 }
 
 interface Props {
@@ -80,8 +82,12 @@ export default function MetadataPopover({
 
   if (!target) return null;
 
+  const isProposed = target.variant === "proposed";
+
   const statusLabel =
-    saveState === "saving"
+    isProposed
+      ? ""
+      : saveState === "saving"
       ? "Saving…"
       : saveState === "saved"
       ? "Saved"
@@ -97,72 +103,87 @@ export default function MetadataPopover({
           ×
         </button>
       </div>
-      <p className="metadata-popover__hint">
-        Changes save automatically ({target.ownerType}).
-      </p>
+      {isProposed ? (
+        <>
+          <p className="metadata-popover__hint">AI-generated optimization proposal.</p>
+          <div className="metadata-field">
+            <span>Rationale</span>
+            <p className="metadata-rationale">{target.rationale ?? initial.description ?? "—"}</p>
+          </div>
+          <button type="button" className="btn btn--agentic" disabled title="Available in Step 5d">
+            Agentic Options
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="metadata-popover__hint">
+            Changes save automatically ({target.ownerType}).
+          </p>
 
-      <label className="metadata-field">
-        <span>Name</span>
-        <input
-          type="text"
-          value={form.name ?? ""}
-          onChange={(e) => update("name", e.target.value || null)}
-        />
-      </label>
+          <label className="metadata-field">
+            <span>Name</span>
+            <input
+              type="text"
+              value={form.name ?? ""}
+              onChange={(e) => update("name", e.target.value || null)}
+            />
+          </label>
 
-      <label className="metadata-field">
-        <span>Owner</span>
-        <input
-          type="text"
-          value={form.owner ?? ""}
-          onChange={(e) => update("owner", e.target.value || null)}
-        />
-      </label>
+          <label className="metadata-field">
+            <span>Owner</span>
+            <input
+              type="text"
+              value={form.owner ?? ""}
+              onChange={(e) => update("owner", e.target.value || null)}
+            />
+          </label>
 
-      <div className="metadata-field metadata-field--row">
-        <label>
-          <span>Expected duration</span>
-          <input
-            type="number"
-            min={0}
-            value={form.duration_value ?? ""}
-            onChange={(e) => {
-              const v = e.target.value;
-              update("duration_value", v === "" ? null : parseInt(v, 10));
-            }}
-          />
-        </label>
-        <label>
-          <span>Unit</span>
-          <select
-            value={form.duration_unit ?? ""}
-            onChange={(e) =>
-              update(
-                "duration_unit",
-                (e.target.value || null) as MetadataRecord["duration_unit"]
-              )
-            }
-          >
-            <option value="">—</option>
-            <option value="minutes">minutes</option>
-            <option value="hours">hours</option>
-            <option value="days">days</option>
-          </select>
-        </label>
-      </div>
+          <div className="metadata-field metadata-field--row">
+            <label>
+              <span>Expected duration</span>
+              <input
+                type="number"
+                min={0}
+                value={form.duration_value ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  update("duration_value", v === "" ? null : parseInt(v, 10));
+                }}
+              />
+            </label>
+            <label>
+              <span>Unit</span>
+              <select
+                value={form.duration_unit ?? ""}
+                onChange={(e) =>
+                  update(
+                    "duration_unit",
+                    (e.target.value || null) as MetadataRecord["duration_unit"]
+                  )
+                }
+              >
+                <option value="">—</option>
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+                <option value="days">days</option>
+              </select>
+            </label>
+          </div>
 
-      <label className="metadata-field">
-        <span>Description</span>
-        <textarea
-          rows={4}
-          value={form.description ?? ""}
-          onChange={(e) => update("description", e.target.value || null)}
-        />
-      </label>
+          <label className="metadata-field">
+            <span>Description</span>
+            <textarea
+              rows={4}
+              value={form.description ?? ""}
+              onChange={(e) => update("description", e.target.value || null)}
+            />
+          </label>
 
-      <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
-        {statusLabel}
-      </p>
+          <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
+            {statusLabel}
+          </p>
+        </>
+      )}
     </aside>
   );
 }

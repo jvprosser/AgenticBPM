@@ -1,4 +1,4 @@
-# Cloudera AI Process Mapper — Technical Blueprint v5
+# Cloudera AI Process Mapper — Technical Blueprint v7
 
 ## 0. Purpose & Demo Narrative
 
@@ -17,8 +17,8 @@ Every design choice serves that north-star metric.
 | **Frontend** | React + **React Flow** (`@xyflow/react`) | Server-authoritative; no client-side domain logic. Locked topology, drag-to-reposition, agentic bounding-box groups, metadata popovers, agentic-options dialog. |
 | **Backend** | **FastAPI** on a Cloudera AI (CML) Application | Owns BPMN parsing, graph model, metadata, discovery proxy, agentic suggest. Pydantic = typed contract; free OpenAPI docs. |
 | **Operational DB** | **SQLite** in CML project storage | **Single-replica, WAL mode, `busy_timeout`.** Single-user demo scope (NFS-locking boundary documented). |
-| **Discovery** | `GET /api/discovery` (auth passthrough) | Proxies the platform discovery service using the active CML/CDP token from env; returns parsed `mcp_servers[]`, `models[]`, `tools[]`. |
-| **AI Seam** | `POST /agentic/suggest` | Phase 1: deterministic stub shaped like Agent Studio "Generate with AI"; consumes discovery results when available. Phase 2: live Cloudera AI Inference call. |
+| **Discovery** | `GET /api/discovery` (auth passthrough) | Resolves platform token (§4.1), calls discovery service, returns a **capability matrix** (`mcp_servers[]`, `models[]`, `tools[]`) with `discovery_active` flag. On failure → **Sandbox Fallback Mode** (always HTTP 200). |
+| **AI Seam** | `POST /agentic/suggest` | Consumes capability matrix; Phase 1 deterministic stub. Response echoes `discovery_active` for UI banner (§4.2). Phase 2: live Cloudera AI Inference call. |
 | **Analytics Sync** | Async **"Publish"** → **Iceberg** via **PyIceberg** | Queryable in **CDW (Impala/Hive) or Spark** — CDP-native (not Trino). |
 
 **Guardrails from day 0:** single replica · `PRAGMA journal_mode=WAL` + `busy_timeout=5000`
@@ -44,7 +44,10 @@ cross-department work).
 - **`node`** — `id`, `process_id`, `source_ref`, `type`, `label`, `x`, `y`, `lane_id?`, `group_id?`, `parent_ref?` (containing subprocess), `attached_to_ref?` (host node for boundary events)  *(`group_id` nullable FK ⇒ many nodes → one group; `lane_id` nullable — some nodes, e.g. `Gateway_MergePayout`, sit outside any lane)*
 - **`edge`** — `id`, `process_id`, `source_node_id`, `target_node_id` *(read-only)*
 - **`lane`** — `id`, `process_id`, `label` *(read-only container)*
-- **`group`** (agentic underlay ↔ one Agent Studio *workflow*) — `id`, `process_id`, `bbox_geometry`, `deployment_status` (`unlinked`|`proposed`|`draft`|`linked`|`deployed`), `workflow_definition_json?`, `agent_studio_workflow_id?`, `agent_studio_url?`, `inference_endpoint_url?`
+- **`group`** (agentic underlay ↔ one Agent Studio *workflow*; SQLite table `"group"`) —
+  `id`, `process_id`, `bbox_geometry`, `deployment_status` with DB-level CHECK constraint
+  *(see §4.3.1)*, `workflow_definition_json?`, `agent_studio_workflow_id?`,
+  `agent_studio_url?`, `inference_endpoint_url?`
 - **`metadata`** — `owner_type` (`node`|`group`), `owner_id`, `name`, `owner`, `duration_value` (int), `duration_unit` (`minutes`|`hours`|`days`), `description`
 
 **Mandatory:** `duration_value`/`duration_unit` on **every node** — the automatable-labor-hours
@@ -67,40 +70,194 @@ State flow: `unlinked` → `proposed` → `draft` → `linked` → `deployed`.
 
 ### 4.1 Platform discovery (Step 5b)
 
-Before generating a workflow blueprint, the backend calls the **platform discovery service**
-with the active token injected by the CML/CDP runtime (e.g. `CDP_TOKEN`, `CDSW_APIV2_KEY` —
-exact env var is environment-specific and documented at implementation time).
+The backend builds a **capability matrix** — the set of MCP servers, models, and tools the
+suggest algorithm (5c) may reference. Discovery is attempted on every `GET /api/discovery`
+(cache TTL ~5 min); the matrix is **never empty** after baseline merge (§4.1.3).
 
-`GET /api/discovery` returns a normalized payload:
+#### 4.1.1 Token source strategy (sequential)
+
+The discovery client resolves credentials in this order:
+
+1. **`CLOUDERA_AI_TOKEN`** — environment variable injected in the CML session / Application
+   runtime context.
+2. **`_cdswuserstoken` cookie** — extracted from the incoming HTTP request when the env var
+   is absent (browser session proxied through the CML Application).
+
+If neither source yields a token, discovery is treated as failed → Sandbox Fallback Mode
+(§4.1.2). The resolved source is logged (never the token value).
+
+#### 4.1.2 Sandbox Fallback Mode (5b → 5c soft degrade)
+
+If `GET /api/discovery` cannot reach the platform (auth error, network timeout, missing
+token, or gRPC/HTTP transport failure), the backend **does not return an error to the
+client**. Instead it:
+
+1. **Logs** the failure (reason + stack) server-side.
+2. **Populates** the capability matrix with **baseline enterprise templates** (§4.1.3).
+3. **Returns HTTP 200** with `"discovery_active": false`.
+
+Step 5c **always proceeds** in Sandbox Fallback Mode — it is not blocked. The suggest
+response echoes `discovery_active: false` so the UI can warn the operator.
+
+#### 4.1.3 Baseline enterprise templates
+
+Appended to any capability matrix when (a) discovery fails, or (b) a successful platform
+response returns **empty arrays** (see §4.1.4). Baselines are merged without duplicates
+(platform entries take precedence over name-colliding baselines).
+
+| Category | Baseline entries |
+|---|---|
+| **models** | `llama-3-70b-instruct` |
+| **tools** | `code_execution`, `vector_search` |
+| **mcp_servers** | *(none — MCP list may remain empty in sandbox)* |
+
+#### 4.1.4 Empty array policy
+
+A **successful** platform discovery call returning HTTP/gRPC **200** with empty arrays
+(e.g. `models: []`) is **not a failure**. It means the workspace has not registered custom
+templates yet. The backend:
+
+- Sets `"discovery_active": true` (platform was reached and authenticated).
+- **Appends** baseline defaults (§4.1.3) so the matrix still gives 5c tools/models to reason with.
+- Returns the merged matrix.
+
+#### 4.1.5 Response contract
+
+`GET /api/discovery` **always** returns HTTP 200 with:
 
 ```json
 {
   "mcp_servers": [{ "id": "...", "name": "...", "url": "..." }],
-  "models": [{ "id": "...", "name": "...", "provider": "..." }],
-  "tools": [{ "id": "...", "name": "...", "type": "builtin|custom|mcp" }],
-  "discovery_ok": true,
+  "models": [{ "id": "...", "name": "llama-3-70b-instruct", "provider": "..." }],
+  "tools": [{ "id": "...", "name": "code_execution", "type": "builtin|custom|mcp" }],
+  "discovery_active": true,
   "source": "platform"
 }
 ```
 
-**Verify gate policy:** HTTP 200 + parsed arrays (arrays may be **empty** — that is not a
-failure). Auth or transport failure sets `discovery_ok: false`.
+Sandbox Fallback example:
 
-**Degrade policy (demo):** If discovery fails, Step 5c **soft-degrades** — the suggest
-algorithm runs with built-in default tool/model names and the UI shows a visible banner
-(`Discovery unavailable; using defaults`). This keeps the demo runnable in environments
-without a discovery endpoint. Production deployments may choose to hard-block 5c instead.
+```json
+{
+  "mcp_servers": [],
+  "models": [{ "id": "baseline", "name": "llama-3-70b-instruct", "provider": "baseline" }],
+  "tools": [
+    { "id": "baseline", "name": "code_execution", "type": "builtin" },
+    { "id": "baseline", "name": "vector_search", "type": "builtin" }
+  ],
+  "discovery_active": false,
+  "source": "sandbox"
+}
+```
 
-Discovery results are cached in-memory (session TTL ~5 min) to avoid hammering the platform
-on every "Agentic Options" click.
+### 4.2 Sandbox Fallback UI (5b → 5c dependency)
 
-### 4.2 Workflow blueprint contract (Pydantic `AgentStudioWorkflow`)
+When the frontend receives an optimization response (`POST /agentic/suggest` or a cached
+group reload) where **`discovery_active` is `false`**, it displays a subtle amber banner
+at the top of the canvas (dismissible per session):
 
-`POST /agentic/suggest` must return a body that validates against this schema — the
-**verify oracle** for Step 5c:
+> ⚠️ Demo Sandbox Mode: Cloudera Agent Studio discovery unreachable. Using baseline enterprise templates.
+
+When `discovery_active` is `true`, no banner is shown.
+
+### 4.3 Step 5c — State machine & Pydantic oracle
+
+Step 5c is an **absolute verify-gate**: nothing from the inference/stub pipeline may touch
+SQLite until it passes schema validation *and* capability-matrix subset checks.
+
+#### 4.3.1 SQLite schema gate (`deployment_status` CHECK)
+
+The `"group"` table (agentic underlay) enforces valid lifecycle states at the DB layer.
+On schema init (SQLite has no `ALTER CONSTRAINT`; the CHECK is declared at `CREATE TABLE`):
+
+```sql
+CREATE TABLE IF NOT EXISTS "group" (
+    ...
+    deployment_status TEXT NOT NULL DEFAULT 'unlinked'
+        CHECK (deployment_status IN (
+            'unlinked', 'proposed', 'draft', 'linked', 'deployed'
+        )),
+    workflow_definition_json TEXT,
+    ...
+);
+```
+
+| Transition | Trigger |
+|---|---|
+| `unlinked` → `proposed` | `POST /agentic/suggest` passes oracle → persist blueprint |
+| `proposed` → `draft` | User opens guided hand-off checklist |
+| `draft` → `linked` | User pastes Agent Studio workflow URL |
+| `linked` → `deployed` | User pastes inference endpoint URL |
+
+Any `UPDATE` setting `deployment_status='proposed'` without a validated
+`workflow_definition_json` is a **gate failure**.
+
+#### 4.3.2 Pydantic oracle (`AgentStudioWorkflow`)
+
+Implementation lives in `backend/app/schemas/agent_studio.py` (Pydantic v2). The inference
+endpoint output must map to these models **before** persistence:
+
+```python
+class AgentStudioAgent(BaseModel):
+    name: str = Field(..., description="Unique name of the agent inside this workflow")
+    role: str
+    goal: str
+    backstory: str
+    tools: list[str] = Field(default_factory=list)
+    llm: str = "default"
+
+class AgentStudioTask(BaseModel):
+    description: str
+    agent: str  # must match an AgentStudioAgent.name
+
+class AgentStudioWorkflow(BaseModel):
+    workflow_name: str
+    type: Literal["task", "conversational"] = "task"
+    manager_agent: bool = False
+    planning: bool = False
+    agents: list[AgentStudioAgent]  # min 1
+    tasks: list[AgentStudioTask]    # min 1
+    confidence: float               # 0.0–1.0
+    rationale: str
+```
+
+**Cross-field validators (oracle rules):**
+
+1. **Task→agent integrity:** every `tasks[].agent` must reference an existing `agents[].name`.
+2. **Tool subset:** when `discovery_active=true`, every `agents[].tools[]` entry ⊆ merged
+   capability-matrix tool names from the latest `GET /api/discovery`.
+3. **LLM subset:** when `discovery_active=true`, every `agents[].llm` ∈ capability-matrix
+   model names.
+4. **Sandbox subset:** when `discovery_active=false`, tools ⊆ `{code_execution, vector_search}`
+   (± baselines) and llm ∈ `{llama-3-70b-instruct, default}`.
+
+Validation entry point: `validate_suggest_payload(raw, discovery_active, allowed_tools,
+allowed_llms)` → returns `AgentStudioSuggestResponse` or raises before any DB write.
+
+#### 4.3.3 Pre-persistence pipeline (5c)
+
+```
+POST /agentic/suggest { group_id }
+  → load group (must exist; typically deployment_status='unlinked' or re-propose)
+  → GET /api/discovery (cached) → capability matrix + discovery_active
+  → call inference / run stub → raw dict
+  → validate_suggest_payload(...)     ← HARD GATE (Pydantic oracle)
+  → UPDATE "group" SET
+       deployment_status = 'proposed',
+       workflow_definition_json = <validated JSON>
+  → return AgentStudioSuggestResponse
+```
+
+If validation fails → **HTTP 422** with field-level detail; `deployment_status` unchanged.
+
+#### 4.3.4 API response envelope
+
+`POST /agentic/suggest` returns `AgentStudioSuggestResponse` — workflow fields plus
+`discovery_active` at the top level (triggers §4.2 banner when `false`):
 
 | Field | Type | Required |
 |---|---|---|
+| `discovery_active` | bool | yes |
 | `workflow_name` | string | yes |
 | `type` | `task` \| `conversational` | yes |
 | `manager_agent` | bool | yes |
@@ -115,19 +272,14 @@ on every "Agentic Options" click.
 | `tasks[]` | array | yes (≥1) |
 | `tasks[].description` | string | yes |
 | `tasks[].agent` | string | yes (must match an agent name) |
-| `confidence` | float | yes |
+| `confidence` | float | yes (0.0–1.0) |
 | `rationale` | string | yes |
 
-When `discovery_ok=true`, every entry in `agents[].tools` and `agents[].llm` should
-reference a discovered tool/model name (subset check in verify gate).
-
-**Proposed — generate the definition.** `POST /agentic/suggest` (stubbed in Phase 1) returns
-an Agent-Studio-shaped workflow — identical to what Studio's own **"Generate with AI"**
-produces. On success the group's `deployment_status` becomes **`proposed`** and the JSON is
-cached in `workflow_definition_json`:
+Example (platform discovery active):
 
 ```json
 {
+  "discovery_active": true,
   "workflow_name": "Invoice Reconciliation",
   "type": "task",
   "manager_agent": false,
@@ -137,8 +289,8 @@ cached in `workflow_definition_json`:
     "role": "3-way match specialist",
     "goal": "Match invoice to PO and receipt, flag discrepancies",
     "backstory": "Read-only ERP access; validates, never approves.",
-    "tools": ["po_lookup", "code_execution"],
-    "llm": "default"
+    "tools": ["code_execution", "vector_search"],
+    "llm": "llama-3-70b-instruct"
   }],
   "tasks": [{ "description": "Validate invoice against PO", "agent": "PO Matcher" }],
   "confidence": 0.82,
@@ -146,16 +298,16 @@ cached in `workflow_definition_json`:
 }
 ```
 
-### 4.3 Guided hand-off (no authoring API)
+### 4.4 Guided hand-off (no authoring API)
 
 Agent Studio has no create/author API, so the dialog presents an **ordered, copy-ready checklist** of the exact steps and
 suggested field values to recreate this workflow in Agent Studio. Opening the checklist
 transitions the group to **`draft`** (user has reviewed the proposal):
 
 1. Create workflow → set **name**, **type** (task/conversational), **manager-agent**/**planning** toggles.
-2. For each agent → paste **role**, **goal**, **backstory**; attach **tools** (from discovery
-   results when available: built-in *Artifact Files*/*Code Execution*, custom, or **MCP**);
-   pick **LLM** (from discovery when available).
+2. For each agent → paste **role**, **goal**, **backstory**; attach **tools** (from the
+   capability matrix: platform-discovered, baseline, or **MCP** when listed); pick **LLM**
+   (from capability matrix).
 3. Define **tasks** and assign to agents.
 4. A **deep-link** button opens Agent Studio's create-workflow page.
 
@@ -196,14 +348,21 @@ Refined payoff query: `… AND deployment_status IN ('proposed','draft','linked'
 5. **[Metadata & Agentic Seam]** — locked behind explicit sub-gates (must pass in order):
    - **5a [Metadata Persistence]** ✅ *implemented* — metadata popover on node **and** group;
      PATCH persists to SQLite; survives page refresh.
-   - **5b [Discovery Auth Passthrough]** `GET /api/discovery` with active platform token
-     from env → *verify:* HTTP 200, response parses to `{ mcp_servers[], models[], tools[] }`
-     (arrays may be empty; auth/transport failure = gate fail). On failure, soft-degrade path
-     documented in §4.1.
+   - **5b [Discovery Auth Passthrough]** `GET /api/discovery` → *verify:*
+     - **Token resolution:** `CLOUDERA_AI_TOKEN` env, else `_cdswuserstoken` request cookie.
+     - **Always HTTP 200** with capability matrix + `discovery_active` boolean.
+     - **Platform success** (incl. empty arrays): `discovery_active=true`, baselines merged
+       when arrays empty; matrix non-empty for models/tools.
+     - **Sandbox Fallback** (auth/timeout/missing token): `discovery_active=false`,
+       `source=sandbox`, baseline templates populated; error logged server-side.
    - **5c [Draft Optimization Generation]** "Agentic Options" on a group →
-     `POST /agentic/suggest` → *verify:* `deployment_status='proposed'`; response body
-     validates against `AgentStudioWorkflow` Pydantic schema; `workflow_definition_json`
-     persisted on group; when discovery succeeded, `agents[].tools` ⊆ discovered tools.
+     `POST /agentic/suggest` → *verify:*
+     - Pre-persistence oracle passes (`validate_suggest_payload` in `schemas/agent_studio.py`).
+     - Invalid payload → HTTP 422; `deployment_status` unchanged.
+     - Valid payload → `deployment_status='proposed'`; `workflow_definition_json` persisted.
+     - `tasks[].agent` ∈ `agents[].name`; tools/llm ⊆ capability matrix per §4.3.2.
+     - Response includes `discovery_active`; amber Sandbox banner when `false` (§4.2).
+     - SQLite CHECK rejects any invalid `deployment_status` value.
    - **5d [Guided Hand-off]** Checklist + deep-link populated from proposed blueprint;
      user acknowledges → status `draft`; user pastes workflow URL → *verify:* opens in Studio;
      status → `linked`.
@@ -211,9 +370,10 @@ Refined payoff query: `… AND deployment_status IN ('proposed','draft','linked'
      "Run" issues `kickoff` → *verify:* returns `trace_id`.
 6. **[Data Lake Sync]** "Publish" → *verify:* flattened state in Iceberg, readable from CDW/Spark; labor-hours query returns a number.
 
-**Stretch:** XPDL parser · live Cloudera AI Inference `/agentic/suggest` · hard-block 5c when
-discovery fails (production mode) · process-intelligence suggestions (Narrative 2) ·
-round-trip BPMN export · auto-discover deployed endpoints instead of manual paste.
+**Stretch:** XPDL parser · live Cloudera AI Inference `/agentic/suggest` · **hard-block 5c**
+when `discovery_active=false` (production mode; demo uses soft degrade per §4.1.2) ·
+process-intelligence suggestions (Narrative 2) · round-trip BPMN export · auto-discover
+deployed endpoints instead of manual paste.
 
 ## Appendix — Key References
 

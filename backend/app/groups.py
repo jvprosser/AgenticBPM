@@ -22,6 +22,25 @@ def _parse_bbox(raw: str | None) -> dict | None:
     return json.loads(raw)
 
 
+def create_proposed_group(
+    conn: sqlite3.Connection,
+    process_id: str,
+    node_ids: list[str],
+    workflow: dict,
+    bbox: dict | None = None,
+) -> dict:
+    """Step 5c: persist an AI-proposed group after oracle validation."""
+    result = _create_group_inner(
+        conn,
+        process_id,
+        node_ids,
+        bbox=bbox,
+        deployment_status="proposed",
+        workflow_definition_json=json.dumps(workflow),
+    )
+    return result
+
+
 def create_group(
     conn: sqlite3.Connection,
     process_id: str,
@@ -29,6 +48,20 @@ def create_group(
     bbox: dict | None = None,
 ) -> dict:
     """Create an agentic underlay group and assign nodes (strict 1 group per node)."""
+    return _create_group_inner(
+        conn, process_id, node_ids, bbox=bbox, deployment_status="unlinked"
+    )
+
+
+def _create_group_inner(
+    conn: sqlite3.Connection,
+    process_id: str,
+    node_ids: list[str],
+    *,
+    bbox: dict | None,
+    deployment_status: str,
+    workflow_definition_json: str | None = None,
+) -> dict:
     if not node_ids:
         raise ValueError("At least one node is required to create a group.")
 
@@ -56,9 +89,10 @@ def create_group(
 
     group_id = uuid.uuid4().hex
     conn.execute(
-        'INSERT INTO "group" (id, process_id, bbox_geometry, deployment_status) '
-        "VALUES (?, ?, ?, 'unlinked')",
-        (group_id, process_id, json.dumps(bbox)),
+        'INSERT INTO "group" '
+        "(id, process_id, bbox_geometry, deployment_status, workflow_definition_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (group_id, process_id, json.dumps(bbox), deployment_status, workflow_definition_json),
     )
     conn.executemany(
         "UPDATE node SET group_id = ? WHERE id = ? AND process_id = ?",
@@ -72,7 +106,7 @@ def create_group(
         "process_id": process_id,
         "node_ids": unique_ids,
         "bbox": bbox,
-        "deployment_status": "unlinked",
+        "deployment_status": deployment_status,
     }
 
 
@@ -87,16 +121,26 @@ def _delete_empty_groups(conn: sqlite3.Connection, group_ids: set[str]) -> None:
 
 def list_groups(conn: sqlite3.Connection, process_id: str) -> list[dict]:
     rows = conn.execute(
-        'SELECT id, bbox_geometry, deployment_status FROM "group" WHERE process_id = ?',
+        'SELECT id, bbox_geometry, deployment_status, workflow_definition_json '
+        'FROM "group" WHERE process_id = ?',
         (process_id,),
     ).fetchall()
     out: list[dict] = []
     for r in rows:
+        workflow = None
+        if r["workflow_definition_json"]:
+            workflow = json.loads(r["workflow_definition_json"])
+        node_rows = conn.execute(
+            "SELECT id FROM node WHERE process_id = ? AND group_id = ?",
+            (process_id, r["id"]),
+        ).fetchall()
         out.append(
             {
                 "id": r["id"],
                 "bbox": _parse_bbox(r["bbox_geometry"]),
                 "deployment_status": r["deployment_status"],
+                "workflow_definition": workflow,
+                "node_ids": [nr["id"] for nr in node_rows],
             }
         )
     return out

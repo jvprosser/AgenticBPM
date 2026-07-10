@@ -176,6 +176,17 @@ body {
   margin: 0 0 0.5rem;
 }
 
+.sandbox-banner {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid #b45309;
+  background: rgba(180, 83, 9, 0.12);
+  color: #fbbf24;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
 .save-pill {
   font-size: 0.78rem;
   min-width: 96px;
@@ -322,6 +333,50 @@ body {
 
 .bpmn-node--grouped {
   box-shadow: 0 0 0 2px #a855f7;
+}
+
+.group-overlay--proposed {
+  border: 2px dashed #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.group-overlay__label--pulse {
+  color: #fbbf24;
+  animation: pulse-amber 2s ease-in-out infinite;
+}
+
+@keyframes pulse-amber {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.btn--suggest {
+  border-color: #f59e0b;
+  color: #fde68a;
+}
+
+.btn--suggest:hover:not(:disabled) {
+  border-color: #fbbf24;
+}
+
+.btn--agentic {
+  width: 100%;
+  margin-top: 0.5rem;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.metadata-rationale {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
 }
 
 .group-overlay {

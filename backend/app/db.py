@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS "group" (
     id                      TEXT PRIMARY KEY,
     process_id              TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
     bbox_geometry           TEXT,
-    deployment_status       TEXT NOT NULL DEFAULT 'unlinked',
+    deployment_status       TEXT NOT NULL DEFAULT 'unlinked'
+        CHECK (deployment_status IN ('unlinked','proposed','draft','linked','deployed')),
     workflow_definition_json TEXT,
     agent_studio_workflow_id TEXT,
     agent_studio_url        TEXT,

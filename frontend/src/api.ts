@@ -44,6 +44,40 @@ export interface GraphGroup {
   bbox: BboxGeometry | null;
   deployment_status: string;
   metadata: MetadataRecord;
+  node_ids?: string[];
+  workflow_definition?: SuggestWorkflow | null;
+}
+
+export interface SuggestAgent {
+  name: string;
+  role: string;
+  goal: string;
+  backstory: string;
+  tools: string[];
+}
+
+export interface SuggestTask {
+  description: string;
+  agent: string;
+}
+
+export interface SuggestWorkflow {
+  workflow_name: string;
+  type: "task" | "conversational";
+  manager_agent: boolean;
+  planning: boolean;
+  agents: SuggestAgent[];
+  tasks: SuggestTask[];
+  confidence: number;
+  rationale: string;
+}
+
+export interface SuggestResult extends SuggestWorkflow {
+  discovery_active: boolean;
+  group_id: string;
+  node_ids: string[];
+  bbox: BboxGeometry;
+  deployment_status: string;
 }
 
 export interface GraphEdge {
@@ -81,6 +115,19 @@ export interface HealthResult {
   version: string;
 }
 
+export interface DiscoveryNamedEntry {
+  name: string;
+  description: string;
+}
+
+export interface DiscoveryResult {
+  models: string[];
+  mcp_servers: DiscoveryNamedEntry[];
+  tools: DiscoveryNamedEntry[];
+  discovery_active: boolean;
+  source: string;
+}
+
 export async function getHealth(): Promise<HealthResult> {
   const res = await fetch("/health");
   if (!res.ok) throw new Error(`Health check failed (${res.status})`);
@@ -95,6 +142,12 @@ async function parseError(res: Response, fallback: string): Promise<string> {
     /* non-JSON error body */
   }
   return `${fallback} (${res.status})`;
+}
+
+export async function getDiscovery(): Promise<DiscoveryResult> {
+  const res = await fetch("/api/discovery");
+  if (!res.ok) throw new Error(await parseError(res, "Discovery failed"));
+  return res.json();
 }
 
 export async function uploadProcessFile(file: File): Promise<UploadResult> {
@@ -146,6 +199,12 @@ export interface MetadataUpsertBody {
   owner_type: "node" | "group";
   owner_id: string;
   metadata: MetadataRecord;
+}
+
+export async function suggestOptimization(processId: string): Promise<SuggestResult> {
+  const res = await fetch(`/api/processes/${processId}/suggest`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseError(res, "Suggestion failed"));
+  return res.json();
 }
 
 export async function upsertMetadata(
