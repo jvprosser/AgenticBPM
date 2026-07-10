@@ -21,6 +21,7 @@ DISCOVERY_TIMEOUT_S = float(os.environ.get("DISCOVERY_TIMEOUT_S", "15"))
 _LIST_MODELS_PATH = "/api/grpc/listModels"
 _LIST_MCP_TEMPLATES_PATH = "/api/grpc/listMcpTemplates"
 _LIST_TOOL_TEMPLATES_PATH = "/api/grpc/listToolTemplates"
+_GET_MCP_TEMPLATE_PATH = "/api/grpc/getMcpTemplate"
 
 _DISCOVERY_HEADERS = {
     "accept": "*/*",
@@ -38,6 +39,12 @@ SANDBOX_DEFAULTS: dict[str, Any] = {
         {
             "name": "Guidewire Claims Core",
             "description": "Exposes read-only access to legacy insurance database tables.",
+            "tools": [
+                {
+                    "name": "pdf_text_extractor",
+                    "description": "Extracts text from unstructured medical PDFs.",
+                }
+            ],
         }
     ],
     "tools": [
@@ -52,14 +59,10 @@ SANDBOX_DEFAULTS: dict[str, Any] = {
     ],
 }
 
-# Injected per-array when platform returns 200 OK with empty lists (§4.1.3 / §4.1.4).
 PLATFORM_BASELINES: dict[str, Any] = {
     "models": ["llama-3-70b-instruct"],
     "mcp_servers": list(SANDBOX_DEFAULTS["mcp_servers"]),
-    "tools": [
-        {"name": "code_execution", "description": ""},
-        {"name": "vector_search", "description": ""},
-    ],
+    "tools": [],
 }
 
 
@@ -68,9 +71,19 @@ class NamedEntry(BaseModel):
     description: str = ""
 
 
+class McpServerEntry(BaseModel):
+    name: str
+    description: str = ""
+    tools: list[NamedEntry] = Field(default_factory=list)
+
+
 class DiscoveryResponse(BaseModel):
     models: list[str] = Field(default_factory=list)
-    mcp_servers: list[NamedEntry] = Field(default_factory=list)
+    default_model: Optional[str] = Field(
+        default=None,
+        description="Studio default LLM from listModels (is_studio_default=true).",
+    )
+    mcp_servers: list[McpServerEntry] = Field(default_factory=list)
     tools: list[NamedEntry] = Field(default_factory=list)
     discovery_active: bool
     source: str = Field(description="'platform' when live discovery succeeded, else 'sandbox'")
@@ -81,7 +94,6 @@ class DiscoveryResponse(BaseModel):
 
 
 def _resolve_token(user_token: Optional[str]) -> tuple[Optional[str], str]:
-    """Return (token, source_label) for diagnostics — never log the token itself."""
     env_token = os.environ.get("CLOUDERA_AI_TOKEN", "").strip()
     if env_token:
         return env_token, "env:CLOUDERA_AI_TOKEN"
@@ -90,56 +102,143 @@ def _resolve_token(user_token: Optional[str]) -> tuple[Optional[str], str]:
     return None, "none"
 
 
-def _sandbox_response(reason: str) -> DiscoveryResponse:
-    logger.warning("Discovery sandbox fallback: %s", reason)
-    return DiscoveryResponse(
-        models=list(SANDBOX_DEFAULTS["models"]),
-        mcp_servers=[NamedEntry(**e) for e in SANDBOX_DEFAULTS["mcp_servers"]],
-        tools=[NamedEntry(**e) for e in SANDBOX_DEFAULTS["tools"]],
-        discovery_active=False,
-        source="sandbox",
-        degraded_reason=reason,
-    )
+def _item_name(item: dict[str, Any]) -> Optional[str]:
+    name = item.get("name") or item.get("displayName") or item.get("title")
+    return str(name) if name else None
 
 
-def _parse_models(payload: dict[str, Any]) -> list[str]:
+def _item_description(item: dict[str, Any]) -> str:
+    for key in (
+        "description",
+        "toolDescription",
+        "tool_description",
+        "summary",
+        "desc",
+        "shortDescription",
+    ):
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _entry_from_item(item: dict[str, Any]) -> Optional[NamedEntry]:
+    name = _item_name(item)
+    if not name:
+        return None
+    return NamedEntry(name=name, description=_item_description(item))
+
+
+def _tools_with_descriptions(entries: list[NamedEntry]) -> list[NamedEntry]:
+    return [e for e in entries if e.description.strip()]
+
+
+def _parse_models(payload: dict[str, Any]) -> tuple[list[str], Optional[str]]:
+    """Parse listModels response; return all names and the is_studio_default model."""
     models: list[str] = []
+    studio_default: Optional[str] = None
     for item in payload.get("models", []):
         if not isinstance(item, dict):
             continue
         name = item.get("name")
-        if name:
-            models.append(str(name))
-    return models
-
-
-def _entries_from_items(items: list[Any]) -> list[NamedEntry]:
-    entries: list[NamedEntry] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name") or item.get("displayName") or item.get("title")
         if not name:
             continue
-        desc = item.get("description") or item.get("summary") or ""
-        entries.append(NamedEntry(name=str(name), description=str(desc)))
-    return entries
+        model_name = str(name)
+        models.append(model_name)
+        if item.get("is_studio_default") is True:
+            studio_default = model_name
+    return models, studio_default
 
 
-def _parse_templates(payload: dict[str, Any]) -> list[NamedEntry]:
-    items = payload.get("templates")
-    if isinstance(items, list):
-        return _entries_from_items(items)
+def _chosen_model(
+    models: list[str],
+    studio_default: Optional[str],
+    *,
+    sandbox: bool = False,
+) -> Optional[str]:
+    if studio_default and studio_default in models:
+        return studio_default
+    if sandbox:
+        return str(PLATFORM_BASELINES["models"][0]) if PLATFORM_BASELINES["models"] else None
+    if models:
+        return models[0]
+    baselines = list(PLATFORM_BASELINES["models"])
+    return str(baselines[0]) if baselines else None
+
+
+def _parse_tool_templates(payload: dict[str, Any]) -> list[NamedEntry]:
+    for key in ("templates", "toolTemplates", "tools"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            entries: list[NamedEntry] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                entry = _entry_from_item(item)
+                if entry:
+                    entries.append(entry)
+            return _tools_with_descriptions(entries)
     return []
 
 
-def _parse_mcp_templates(payload: dict[str, Any]) -> list[NamedEntry]:
-    """MCP list endpoint may use ``templates`` or ``mcpTemplates``."""
+def _raw_mcp_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     for key in ("templates", "mcpTemplates", "mcp_templates"):
         items = payload.get(key)
-        if isinstance(items, list) and items:
-            return _entries_from_items(items)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
     return []
+
+
+def _dedupe_mcp_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for item in items:
+        name = _item_name(item)
+        if not name or name in seen:
+            continue
+        seen[name] = item
+    return list(seen.values())
+
+
+def _parse_tools_from_mcp_detail(payload: dict[str, Any]) -> list[NamedEntry]:
+    entries: list[NamedEntry] = []
+    for key in ("tools", "toolTemplates", "templates"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                entry = _entry_from_item(item)
+                if entry:
+                    entries.append(entry)
+
+    for wrapper_key in ("template", "mcpTemplate", "mcp_template"):
+        wrapped = payload.get(wrapper_key)
+        if isinstance(wrapped, dict):
+            entries.extend(_parse_tools_from_mcp_detail(wrapped))
+
+    return _tools_with_descriptions(entries)
+
+
+def _get_mcp_template_body(item: dict[str, Any]) -> dict[str, str]:
+    for key in ("id", "templateId", "template_id"):
+        value = item.get(key)
+        if value:
+            return {"id": str(value)}
+    name = _item_name(item)
+    if name:
+        return {"name": name}
+    return {}
+
+
+def _mcp_server_from_dict(data: dict[str, Any]) -> McpServerEntry:
+    tools = [
+        NamedEntry(**t) for t in data.get("tools", []) if isinstance(t, dict) and t.get("name")
+    ]
+    return McpServerEntry(
+        name=str(data["name"]),
+        description=str(data.get("description") or ""),
+        tools=_tools_with_descriptions(tools),
+    )
 
 
 def _apply_model_baselines(models: list[str]) -> list[str]:
@@ -151,44 +250,97 @@ def _apply_model_baselines(models: list[str]) -> list[str]:
 def _apply_tool_baselines(tools: list[NamedEntry]) -> list[NamedEntry]:
     if tools:
         return tools
-    return [NamedEntry(**e) for e in PLATFORM_BASELINES["tools"]]
+    baseline_tools = [
+        NamedEntry(**e) for e in PLATFORM_BASELINES["tools"] if e.get("description")
+    ]
+    return _tools_with_descriptions(baseline_tools)
 
 
-def _apply_mcp_baselines(mcp_servers: list[NamedEntry]) -> list[NamedEntry]:
+def _apply_mcp_baselines(mcp_servers: list[McpServerEntry]) -> list[McpServerEntry]:
     if mcp_servers:
         return mcp_servers
-    return [NamedEntry(**e) for e in PLATFORM_BASELINES["mcp_servers"]]
+    return [_mcp_server_from_dict(e) for e in PLATFORM_BASELINES["mcp_servers"]]
 
 
-async def _post_grpc_list(
-    client: httpx.AsyncClient, path: str, token: str
+async def _post_grpc(
+    client: httpx.AsyncClient,
+    path: str,
+    token: str,
+    body: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     url = f"{config.DISCOVERY_BASE_URL.rstrip('/')}{path}"
+    payload = json.dumps(body if body is not None else {})
     response = await client.post(
         url,
-        content="{}",
+        content=payload,
         headers=_DISCOVERY_HEADERS,
         cookies={"_cdswuserstoken": token},
     )
     response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
+    parsed = response.json()
+    if not isinstance(parsed, dict):
         raise ValueError(f"Unexpected JSON shape from {path}")
-    return body
+    return parsed
+
+
+async def _fetch_mcp_server(
+    client: httpx.AsyncClient, token: str, item: dict[str, Any]
+) -> McpServerEntry:
+    name = _item_name(item) or "unknown"
+    description = _item_description(item)
+    body = _get_mcp_template_body(item)
+    tools: list[NamedEntry] = []
+    if body:
+        try:
+            detail = await _post_grpc(client, _GET_MCP_TEMPLATE_PATH, token, body)
+            tools = _parse_tools_from_mcp_detail(detail)
+        except Exception as exc:
+            logger.warning("getMcpTemplate failed for %s: %s", name, exc)
+    return McpServerEntry(name=name, description=description, tools=tools)
+
+
+async def _fetch_mcp_servers_with_tools(
+    client: httpx.AsyncClient, token: str, mcp_payload: dict[str, Any]
+) -> list[McpServerEntry]:
+    items = _dedupe_mcp_items(_raw_mcp_items(mcp_payload))
+    if not items:
+        return []
+    servers = await asyncio.gather(
+        *[_fetch_mcp_server(client, token, item) for item in items]
+    )
+    return list(servers)
+
+
+def _sandbox_response(reason: str) -> DiscoveryResponse:
+    logger.warning("Discovery sandbox fallback: %s", reason)
+    models = list(SANDBOX_DEFAULTS["models"])
+    return DiscoveryResponse(
+        models=models,
+        default_model=_chosen_model(models, None, sandbox=True),
+        mcp_servers=[_mcp_server_from_dict(e) for e in SANDBOX_DEFAULTS["mcp_servers"]],
+        tools=_tools_with_descriptions([NamedEntry(**e) for e in SANDBOX_DEFAULTS["tools"]]),
+        discovery_active=False,
+        source="sandbox",
+        degraded_reason=reason,
+    )
 
 
 async def _fetch_live_platform(token: str) -> DiscoveryResponse:
     async with httpx.AsyncClient(timeout=DISCOVERY_TIMEOUT_S) as client:
-        models_payload = await _post_grpc_list(client, _LIST_MODELS_PATH, token)
-        mcp_payload = await _post_grpc_list(client, _LIST_MCP_TEMPLATES_PATH, token)
-        tools_payload = await _post_grpc_list(client, _LIST_TOOL_TEMPLATES_PATH, token)
+        models_payload = await _post_grpc(client, _LIST_MODELS_PATH, token)
+        mcp_payload = await _post_grpc(client, _LIST_MCP_TEMPLATES_PATH, token)
+        tools_payload = await _post_grpc(client, _LIST_TOOL_TEMPLATES_PATH, token)
+        mcp_servers = await _fetch_mcp_servers_with_tools(client, token, mcp_payload)
 
-    models = _apply_model_baselines(_parse_models(models_payload))
-    mcp_servers = _apply_mcp_baselines(_parse_mcp_templates(mcp_payload))
-    tools = _apply_tool_baselines(_parse_templates(tools_payload))
+    raw_models, studio_default = _parse_models(models_payload)
+    models = _apply_model_baselines(raw_models)
+    default_model = _chosen_model(models, studio_default)
+    mcp_servers = _apply_mcp_baselines(mcp_servers)
+    tools = _apply_tool_baselines(_parse_tool_templates(tools_payload))
 
     return DiscoveryResponse(
         models=models,
+        default_model=default_model,
         mcp_servers=mcp_servers,
         tools=tools,
         discovery_active=True,
@@ -226,22 +378,14 @@ async def fetch_platform_capabilities(user_token: Optional[str]) -> DiscoveryRes
 
 
 async def _run_discovery_probe(token: str) -> dict[str, Any]:
-    """Standalone probe: fetch and return filtered capability structures."""
-    async with httpx.AsyncClient(timeout=DISCOVERY_TIMEOUT_S) as client:
-        models_payload = await _post_grpc_list(client, _LIST_MODELS_PATH, token)
-        mcp_payload = await _post_grpc_list(client, _LIST_MCP_TEMPLATES_PATH, token)
-        tools_payload = await _post_grpc_list(client, _LIST_TOOL_TEMPLATES_PATH, token)
-
-    models = _apply_model_baselines(_parse_models(models_payload))
-    mcp_servers = _apply_mcp_baselines(_parse_mcp_templates(mcp_payload))
-    tools = _apply_tool_baselines(_parse_templates(tools_payload))
-
+    result = await _fetch_live_platform(token)
     return {
-        "models": models,
-        "mcp_servers": [e.model_dump() for e in mcp_servers],
-        "tools": [e.model_dump() for e in tools],
-        "discovery_active": True,
-        "source": "platform",
+        "models": result.models,
+        "default_model": result.default_model,
+        "mcp_servers": [e.model_dump() for e in result.mcp_servers],
+        "tools": [e.model_dump() for e in result.tools],
+        "discovery_active": result.discovery_active,
+        "source": result.source,
     }
 
 

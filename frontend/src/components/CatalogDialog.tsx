@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { getDiscovery, type DiscoveryNamedEntry, type DiscoveryResult } from "../api";
+import {
+  getDiscovery,
+  type DiscoveryMcpServer,
+  type DiscoveryNamedEntry,
+  type DiscoveryResult,
+} from "../api";
 
 type CatalogTab = "models" | "mcp" | "tools";
 
@@ -33,22 +38,28 @@ function CatalogIcon() {
   );
 }
 
-function ModelList({ models }: { models: string[] }) {
+function ModelList({ models, defaultModel }: { models: string[]; defaultModel?: string | null }) {
   if (!models.length) {
     return <p className="catalog-empty">No models registered.</p>;
   }
   return (
     <ul className="catalog-grid">
       {models.map((name) => (
-        <li key={name} className="catalog-card catalog-card--model">
+        <li
+          key={name}
+          className={`catalog-card catalog-card--model${name === defaultModel ? " catalog-card--default" : ""}`}
+        >
           <span className="catalog-card__name">{name}</span>
+          {name === defaultModel && (
+            <span className="catalog-card__badge">Studio default</span>
+          )}
         </li>
       ))}
     </ul>
   );
 }
 
-function EntryList({ entries, emptyLabel }: { entries: DiscoveryNamedEntry[]; emptyLabel: string }) {
+function ToolList({ entries, emptyLabel }: { entries: DiscoveryNamedEntry[]; emptyLabel: string }) {
   if (!entries.length) {
     return <p className="catalog-empty">{emptyLabel}</p>;
   }
@@ -57,10 +68,36 @@ function EntryList({ entries, emptyLabel }: { entries: DiscoveryNamedEntry[]; em
       {entries.map((entry) => (
         <li key={entry.name} className="catalog-card catalog-card--entry">
           <span className="catalog-card__name">{entry.name}</span>
-          {entry.description ? (
-            <p className="catalog-card__desc">{entry.description}</p>
+          <p className="catalog-card__desc">{entry.description}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function McpServerList({ servers }: { servers: DiscoveryMcpServer[] }) {
+  if (!servers.length) {
+    return <p className="catalog-empty">No MCP servers registered.</p>;
+  }
+  return (
+    <ul className="catalog-list">
+      {servers.map((server) => (
+        <li key={server.name} className="catalog-card catalog-card--mcp">
+          <span className="catalog-card__name">{server.name}</span>
+          {server.description ? (
+            <p className="catalog-card__desc">{server.description}</p>
+          ) : null}
+          {server.tools.length > 0 ? (
+            <ul className="catalog-mcp-tools">
+              {server.tools.map((tool) => (
+                <li key={`${server.name}:${tool.name}`} className="catalog-mcp-tool">
+                  <span className="catalog-mcp-tool__name">{tool.name}</span>
+                  <span className="catalog-mcp-tool__desc">{tool.description}</span>
+                </li>
+              ))}
+            </ul>
           ) : (
-            <p className="catalog-card__desc catalog-card__desc--muted">No description provided.</p>
+            <p className="catalog-card__desc catalog-card__desc--muted">No tools with descriptions.</p>
           )}
         </li>
       ))}
@@ -178,12 +215,15 @@ export default function CatalogDialog({ isOpen, onClose }: Props) {
               {!data.discovery_active && data.degraded_reason && (
                 <p className="catalog-degraded">{data.degraded_reason}</p>
               )}
-              {tab === "models" && <ModelList models={data.models} />}
-              {tab === "mcp" && (
-                <EntryList entries={data.mcp_servers} emptyLabel="No MCP servers registered." />
+              {tab === "models" && (
+                <ModelList models={data.models} defaultModel={data.default_model} />
               )}
+              {tab === "mcp" && <McpServerList servers={data.mcp_servers} />}
               {tab === "tools" && (
-                <EntryList entries={data.tools} emptyLabel="No tools registered." />
+                <ToolList
+                  entries={data.tools}
+                  emptyLabel="No tools with descriptions registered."
+                />
               )}
             </>
           )}

@@ -620,6 +620,21 @@ body {
   text-align: center;
 }
 
+.catalog-card--default {
+  border-color: var(--ok);
+  background: rgba(46, 160, 67, 0.08);
+}
+
+.catalog-card__badge {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ok);
+  font-weight: 600;
+}
+
 .catalog-card__name {
   font-size: 0.88rem;
   font-weight: 600;
@@ -635,6 +650,40 @@ body {
 
 .catalog-card__desc--muted {
   font-style: italic;
+}
+
+.catalog-card--mcp {
+  padding-bottom: 0.55rem;
+}
+
+.catalog-mcp-tools {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0.5rem 0 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.catalog-mcp-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-left: 0.35rem;
+  border-left: 2px solid #3b82f6;
+}
+
+.catalog-mcp-tool__name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.catalog-mcp-tool__desc {
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--muted);
 }
 
 .catalog-retry {

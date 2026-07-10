@@ -120,9 +120,14 @@ export interface DiscoveryNamedEntry {
   description: string;
 }
 
+export interface DiscoveryMcpServer extends DiscoveryNamedEntry {
+  tools: DiscoveryNamedEntry[];
+}
+
 export interface DiscoveryResult {
   models: string[];
-  mcp_servers: DiscoveryNamedEntry[];
+  default_model?: string | null;
+  mcp_servers: DiscoveryMcpServer[];
   tools: DiscoveryNamedEntry[];
   discovery_active: boolean;
   source: string;

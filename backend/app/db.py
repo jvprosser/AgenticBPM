@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS metadata (
     PRIMARY KEY (owner_type, owner_id)
 );
 
+CREATE TABLE IF NOT EXISTS strategic_override (
+    id          TEXT PRIMARY KEY,
+    process_id  TEXT NOT NULL,
+    node_ids    TEXT NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (process_id) REFERENCES process(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_node_process ON node(process_id);
 CREATE INDEX IF NOT EXISTS idx_edge_process ON edge(process_id);
 CREATE INDEX IF NOT EXISTS idx_lane_process ON lane(process_id);

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, discovery, groups, ingestion, metadata as metadata_svc, suggest
+from . import config, db, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 
 config.ensure_dirs()
 db.init_db()
@@ -134,6 +134,22 @@ class BboxGeometry(BaseModel):
 class CreateGroupRequest(BaseModel):
     node_ids: list[str]
     bbox: Optional[BboxGeometry] = None
+
+
+class StrategicOverrideRequest(BaseModel):
+    node_ids: list[str]
+
+
+@app.post("/api/processes/{process_id}/overrides", tags=["overrides"])
+def create_strategic_override(process_id: str, body: StrategicOverrideRequest) -> dict:
+    """Record a strategic boundary override and purge matching proposed agentic groups."""
+    try:
+        with db.get_conn() as conn:
+            return overrides.record_override(conn, process_id, body.node_ids)
+    except ValueError as exc:
+        msg = str(exc)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
 
 
 @app.post("/api/processes/{process_id}/groups", tags=["groups"])
