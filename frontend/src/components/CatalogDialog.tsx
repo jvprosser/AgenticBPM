@@ -92,12 +92,14 @@ function McpServerList({ servers }: { servers: DiscoveryMcpServer[] }) {
               {server.tools.map((tool) => (
                 <li key={`${server.name}:${tool.name}`} className="catalog-mcp-tool">
                   <span className="catalog-mcp-tool__name">{tool.name}</span>
-                  <span className="catalog-mcp-tool__desc">{tool.description}</span>
+                  {tool.description ? (
+                    <span className="catalog-mcp-tool__desc">{tool.description}</span>
+                  ) : null}
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="catalog-card__desc catalog-card__desc--muted">No tools with descriptions.</p>
+            <p className="catalog-card__desc catalog-card__desc--muted">No tools registered.</p>
           )}
         </li>
       ))}

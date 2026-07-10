@@ -133,20 +133,33 @@ def _tools_with_descriptions(entries: list[NamedEntry]) -> list[NamedEntry]:
     return [e for e in entries if e.description.strip()]
 
 
+def _model_name_from_item(item: dict[str, Any]) -> Optional[str]:
+    for key in ("model_name", "name", "displayName"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 def _parse_models(payload: dict[str, Any]) -> tuple[list[str], Optional[str]]:
     """Parse listModels response; return all names and the is_studio_default model."""
     models: list[str] = []
     studio_default: Optional[str] = None
-    for item in payload.get("models", []):
-        if not isinstance(item, dict):
+    seen: set[str] = set()
+    for key in ("models", "model_details"):
+        items = payload.get(key)
+        if not isinstance(items, list):
             continue
-        name = item.get("name")
-        if not name:
-            continue
-        model_name = str(name)
-        models.append(model_name)
-        if item.get("is_studio_default") is True:
-            studio_default = model_name
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            model_name = _model_name_from_item(item)
+            if not model_name or model_name in seen:
+                continue
+            seen.add(model_name)
+            models.append(model_name)
+            if item.get("is_studio_default") is True:
+                studio_default = model_name
     return models, studio_default
 
 
@@ -216,7 +229,7 @@ def _parse_tools_from_mcp_detail(payload: dict[str, Any]) -> list[NamedEntry]:
         if isinstance(wrapped, dict):
             entries.extend(_parse_tools_from_mcp_detail(wrapped))
 
-    return _tools_with_descriptions(entries)
+    return entries
 
 
 def _get_mcp_template_body(item: dict[str, Any]) -> dict[str, str]:
@@ -237,7 +250,7 @@ def _mcp_server_from_dict(data: dict[str, Any]) -> McpServerEntry:
     return McpServerEntry(
         name=str(data["name"]),
         description=str(data.get("description") or ""),
-        tools=_tools_with_descriptions(tools),
+        tools=tools,
     )
 
 
