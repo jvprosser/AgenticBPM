@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from . import parser
 from .groups import list_groups
 from .layout import apply_cascade_layout
+from .metadata import get_metadata
 
 
 def _qualify(process_id: str, ref: str) -> str:
@@ -120,12 +121,23 @@ def get_graph(conn: sqlite3.Connection, process_id: str) -> dict | None:
         (process_id,),
     ).fetchall()
 
+    node_list = []
+    for r in nodes:
+        d = dict(r)
+        d["metadata"] = get_metadata(conn, "node", r["id"])
+        node_list.append(d)
+
+    group_list = []
+    for g in list_groups(conn, process_id):
+        g["metadata"] = get_metadata(conn, "group", g["id"])
+        group_list.append(g)
+
     return {
         "process": dict(proc),
         "lanes": [dict(r) for r in lanes],
-        "nodes": [dict(r) for r in nodes],
+        "nodes": node_list,
         "edges": [dict(r) for r in edges],
-        "groups": list_groups(conn, process_id),
+        "groups": group_list,
     }
 
 

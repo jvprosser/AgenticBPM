@@ -18,10 +18,20 @@ import {
   createGroup,
   getProcessGraph,
   updateNodePosition,
+  type MetadataRecord,
   type ProcessGraph,
 } from "../api";
 import BpmnNode, { categoryOf, type BpmnNodeData } from "./BpmnNode";
 import GroupOverlay from "./GroupOverlay";
+import MetadataPopover, { type MetadataTarget } from "./MetadataPopover";
+
+const EMPTY_META: MetadataRecord = {
+  name: null,
+  owner: null,
+  duration_value: null,
+  duration_unit: null,
+  description: null,
+};
 
 const nodeTypes = { bpmn: BpmnNode, groupOverlay: GroupOverlay };
 const SAVE_DEBOUNCE_MS = 250;
@@ -44,9 +54,10 @@ function toFlow(graph: ProcessGraph): { nodes: Node[]; edges: Edge[] } {
         width: g.bbox!.width,
         height: g.bbox!.height,
         label: `Agentic underlay · ${g.deployment_status}`,
+        groupId: g.id,
       },
       draggable: false,
-      selectable: false,
+      selectable: true,
       connectable: false,
       focusable: false,
       zIndex: 0,
@@ -95,20 +106,23 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [groupBusy, setGroupBusy] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [graph, setGraph] = useState<ProcessGraph | null>(null);
+  const [metaTarget, setMetaTarget] = useState<MetadataTarget | null>(null);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const loadGraph = useCallback(async () => {
-    const graph = await getProcessGraph(processId);
-    const flow = toFlow(graph);
+    const g = await getProcessGraph(processId);
+    setGraph(g);
+    const flow = toFlow(g);
     setNodes(flow.nodes);
     setEdges(flow.edges);
-    setMeta(graph.process);
+    setMeta(g.process);
     setCounts({
-      nodes: graph.nodes.length,
-      edges: graph.edges.length,
-      lanes: graph.lanes.length,
-      groups: graph.groups?.length ?? 0,
+      nodes: g.nodes.length,
+      edges: g.edges.length,
+      lanes: g.lanes.length,
+      groups: g.groups?.length ?? 0,
     });
     setSelectedIds([]);
   }, [processId, setNodes, setEdges]);
@@ -167,6 +181,61 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
     }
   }, [selectedIds, nodes, processId, loadGraph]);
 
+  const onNodeClick = useCallback(
+    (_evt: React.MouseEvent, node: Node) => {
+      if (selectMode) return;
+      if (node.type === "bpmn") {
+        const gn = graph?.nodes.find((n) => n.id === node.id);
+        setMetaTarget({
+          ownerType: "node",
+          ownerId: node.id,
+          title: `Node · ${gn?.label ?? gn?.source_ref ?? node.id}`,
+        });
+      } else if (node.type === "groupOverlay") {
+        const groupId = (node.data as { groupId?: string }).groupId;
+        if (!groupId) return;
+        const gg = graph?.groups.find((g) => g.id === groupId);
+        setMetaTarget({
+          ownerType: "group",
+          ownerId: groupId,
+          title: `Agentic group · ${gg?.deployment_status ?? "group"}`,
+        });
+      }
+    },
+    [selectMode, graph]
+  );
+
+  const metaInitial = useMemo((): MetadataRecord => {
+    if (!metaTarget || !graph) return EMPTY_META;
+    if (metaTarget.ownerType === "node") {
+      return graph.nodes.find((n) => n.id === metaTarget.ownerId)?.metadata ?? EMPTY_META;
+    }
+    return graph.groups.find((g) => g.id === metaTarget.ownerId)?.metadata ?? EMPTY_META;
+  }, [metaTarget, graph]);
+
+  const handleMetadataSaved = useCallback(
+    (ownerType: "node" | "group", ownerId: string, saved: MetadataRecord) => {
+      setGraph((prev) => {
+        if (!prev) return prev;
+        if (ownerType === "node") {
+          return {
+            ...prev,
+            nodes: prev.nodes.map((n) =>
+              n.id === ownerId ? { ...n, metadata: saved } : n
+            ),
+          };
+        }
+        return {
+          ...prev,
+          groups: prev.groups.map((g) =>
+            g.id === ownerId ? { ...g, metadata: saved } : g
+          ),
+        };
+      });
+    },
+    []
+  );
+
   const saveLabel = useMemo(
     () =>
       ({
@@ -214,31 +283,44 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
       {selectMode && (
         <p className="canvas-hint">
           Drag a rectangle over nodes to select them, then click Create agentic group.
-          Selection may span lanes.
+          Selection may span lanes. Turn off box select to click nodes for metadata.
         </p>
       )}
-      <div className="canvas">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onNodeDragStop={onNodeDragStop}
-          onSelectionChange={onSelectionChange}
-          selectionOnDrag={selectMode}
-          panOnDrag={!selectMode}
-          selectionMode={SelectionMode.Partial}
-          nodesDraggable
-          nodesConnectable={false}
-          elementsSelectable
-          deleteKeyCode={null}
-          fitView
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background gap={16} />
-          <Controls showInteractive={false} />
-          <MiniMap pannable zoomable />
-        </ReactFlow>
+      {!selectMode && !metaTarget && (
+        <p className="canvas-hint">Click a node or agentic group overlay to edit metadata.</p>
+      )}
+      <div className="canvas-layout">
+        <div className="canvas">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onNodeDragStop={onNodeDragStop}
+            onNodeClick={onNodeClick}
+            onSelectionChange={onSelectionChange}
+            selectionOnDrag={selectMode}
+            panOnDrag={!selectMode}
+            selectionMode={SelectionMode.Partial}
+            nodesDraggable
+            nodesConnectable={false}
+            elementsSelectable
+            deleteKeyCode={null}
+            fitView
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background gap={16} />
+            <Controls showInteractive={false} />
+            <MiniMap pannable zoomable />
+          </ReactFlow>
+        </div>
+        <MetadataPopover
+          processId={processId}
+          target={metaTarget}
+          initial={metaInitial}
+          onClose={() => setMetaTarget(null)}
+          onSaved={handleMetadataSaved}
+        />
       </div>
     </div>
   );

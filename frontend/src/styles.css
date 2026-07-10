@@ -192,11 +192,110 @@ body {
 }
 
 .canvas {
+  flex: 1;
+  min-width: 0;
   height: 72vh;
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
   background: #0b1219;
+}
+
+.canvas-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.metadata-popover {
+  width: 280px;
+  flex-shrink: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  height: 72vh;
+  overflow-y: auto;
+}
+
+.metadata-popover__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.metadata-popover__header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+.metadata-popover__hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.metadata-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.82rem;
+}
+
+.metadata-field span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metadata-field input,
+.metadata-field select,
+.metadata-field textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.metadata-field--row {
+  flex-direction: row;
+  gap: 0.5rem;
+}
+
+.metadata-field--row label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.metadata-popover__status {
+  font-size: 0.75rem;
+  min-height: 1rem;
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+
+.metadata-popover__status--saved {
+  color: var(--ok);
+}
+
+.metadata-popover__status--error {
+  color: var(--err);
+}
+
+.btn--sm {
+  padding: 0.15rem 0.45rem;
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 /* React Flow renders on a light default; keep our dark theme readable */
@@ -229,7 +328,8 @@ body {
   border: 2px dashed #a855f7;
   border-radius: 12px;
   background: rgba(168, 85, 247, 0.08);
-  pointer-events: none;
+  pointer-events: all;
+  cursor: pointer;
   position: relative;
 }
 

@@ -10,6 +10,14 @@ export interface UploadResult {
   layout_source: string;
 }
 
+export interface MetadataRecord {
+  name: string | null;
+  owner: string | null;
+  duration_value: number | null;
+  duration_unit: "minutes" | "hours" | "days" | null;
+  description: string | null;
+}
+
 export interface GraphNode {
   id: string;
   source_ref: string;
@@ -21,6 +29,7 @@ export interface GraphNode {
   group_id: string | null;
   parent_ref: string | null;
   attached_to_ref: string | null;
+  metadata: MetadataRecord;
 }
 
 export interface BboxGeometry {
@@ -34,6 +43,7 @@ export interface GraphGroup {
   id: string;
   bbox: BboxGeometry | null;
   deployment_status: string;
+  metadata: MetadataRecord;
 }
 
 export interface GraphEdge {
@@ -129,5 +139,24 @@ export async function createGroup(
     body: JSON.stringify({ node_ids: nodeIds, bbox: bbox ?? null }),
   });
   if (!res.ok) throw new Error(await parseError(res, "Failed to create group"));
+  return res.json();
+}
+
+export interface MetadataUpsertBody {
+  owner_type: "node" | "group";
+  owner_id: string;
+  metadata: MetadataRecord;
+}
+
+export async function upsertMetadata(
+  processId: string,
+  body: MetadataUpsertBody
+): Promise<{ owner_type: string; owner_id: string; metadata: MetadataRecord }> {
+  const res = await fetch(`/api/processes/${processId}/metadata`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to save metadata"));
   return res.json();
 }
