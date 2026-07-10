@@ -55,6 +55,7 @@ SANDBOX_DEFAULTS: dict[str, Any] = {
 # Injected per-array when platform returns 200 OK with empty lists (§4.1.3 / §4.1.4).
 PLATFORM_BASELINES: dict[str, Any] = {
     "models": ["llama-3-70b-instruct"],
+    "mcp_servers": list(SANDBOX_DEFAULTS["mcp_servers"]),
     "tools": [
         {"name": "code_execution", "description": ""},
         {"name": "vector_search", "description": ""},
@@ -112,21 +113,33 @@ def _parse_models(payload: dict[str, Any]) -> list[str]:
     return models
 
 
-def _parse_templates(payload: dict[str, Any]) -> list[NamedEntry]:
+def _entries_from_items(items: list[Any]) -> list[NamedEntry]:
     entries: list[NamedEntry] = []
-    for item in payload.get("templates", []):
+    for item in items:
         if not isinstance(item, dict):
             continue
-        name = item.get("name")
+        name = item.get("name") or item.get("displayName") or item.get("title")
         if not name:
             continue
-        entries.append(
-            NamedEntry(
-                name=str(name),
-                description=str(item.get("description") or ""),
-            )
-        )
+        desc = item.get("description") or item.get("summary") or ""
+        entries.append(NamedEntry(name=str(name), description=str(desc)))
     return entries
+
+
+def _parse_templates(payload: dict[str, Any]) -> list[NamedEntry]:
+    items = payload.get("templates")
+    if isinstance(items, list):
+        return _entries_from_items(items)
+    return []
+
+
+def _parse_mcp_templates(payload: dict[str, Any]) -> list[NamedEntry]:
+    """MCP list endpoint may use ``templates`` or ``mcpTemplates``."""
+    for key in ("templates", "mcpTemplates", "mcp_templates"):
+        items = payload.get(key)
+        if isinstance(items, list) and items:
+            return _entries_from_items(items)
+    return []
 
 
 def _apply_model_baselines(models: list[str]) -> list[str]:
@@ -139,6 +152,12 @@ def _apply_tool_baselines(tools: list[NamedEntry]) -> list[NamedEntry]:
     if tools:
         return tools
     return [NamedEntry(**e) for e in PLATFORM_BASELINES["tools"]]
+
+
+def _apply_mcp_baselines(mcp_servers: list[NamedEntry]) -> list[NamedEntry]:
+    if mcp_servers:
+        return mcp_servers
+    return [NamedEntry(**e) for e in PLATFORM_BASELINES["mcp_servers"]]
 
 
 async def _post_grpc_list(
@@ -165,7 +184,7 @@ async def _fetch_live_platform(token: str) -> DiscoveryResponse:
         tools_payload = await _post_grpc_list(client, _LIST_TOOL_TEMPLATES_PATH, token)
 
     models = _apply_model_baselines(_parse_models(models_payload))
-    mcp_servers = _parse_templates(mcp_payload)
+    mcp_servers = _apply_mcp_baselines(_parse_mcp_templates(mcp_payload))
     tools = _apply_tool_baselines(_parse_templates(tools_payload))
 
     return DiscoveryResponse(
@@ -214,7 +233,7 @@ async def _run_discovery_probe(token: str) -> dict[str, Any]:
         tools_payload = await _post_grpc_list(client, _LIST_TOOL_TEMPLATES_PATH, token)
 
     models = _apply_model_baselines(_parse_models(models_payload))
-    mcp_servers = _parse_templates(mcp_payload)
+    mcp_servers = _apply_mcp_baselines(_parse_mcp_templates(mcp_payload))
     tools = _apply_tool_baselines(_parse_templates(tools_payload))
 
     return {
