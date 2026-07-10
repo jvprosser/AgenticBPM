@@ -126,6 +126,7 @@ export interface DiscoveryResult {
   tools: DiscoveryNamedEntry[];
   discovery_active: boolean;
   source: string;
+  degraded_reason?: string | null;
 }
 
 export async function getHealth(): Promise<HealthResult> {
@@ -145,7 +146,7 @@ async function parseError(res: Response, fallback: string): Promise<string> {
 }
 
 export async function getDiscovery(): Promise<DiscoveryResult> {
-  const res = await fetch("/api/discovery");
+  const res = await fetch("/api/discovery", { credentials: "include" });
   if (!res.ok) throw new Error(await parseError(res, "Discovery failed"));
   return res.json();
 }
@@ -202,7 +203,10 @@ export interface MetadataUpsertBody {
 }
 
 export async function suggestOptimization(processId: string): Promise<SuggestResult> {
-  const res = await fetch(`/api/processes/${processId}/suggest`, { method: "POST" });
+  const res = await fetch(`/api/processes/${processId}/suggest`, {
+    method: "POST",
+    credentials: "include",
+  });
   if (!res.ok) throw new Error(await parseError(res, "Suggestion failed"));
   return res.json();
 }

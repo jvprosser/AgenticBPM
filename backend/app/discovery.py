@@ -73,25 +73,31 @@ class DiscoveryResponse(BaseModel):
     tools: list[NamedEntry] = Field(default_factory=list)
     discovery_active: bool
     source: str = Field(description="'platform' when live discovery succeeded, else 'sandbox'")
+    degraded_reason: Optional[str] = Field(
+        default=None,
+        description="Set when discovery_active=false; safe diagnostic (never includes token values).",
+    )
 
 
-def _resolve_token(user_token: Optional[str]) -> Optional[str]:
-    """Token order: CLOUDERA_AI_TOKEN env, then caller-supplied browser cookie/header."""
+def _resolve_token(user_token: Optional[str]) -> tuple[Optional[str], str]:
+    """Return (token, source_label) for diagnostics — never log the token itself."""
     env_token = os.environ.get("CLOUDERA_AI_TOKEN", "").strip()
     if env_token:
-        return env_token
+        return env_token, "env:CLOUDERA_AI_TOKEN"
     if user_token and user_token.strip():
-        return user_token.strip()
-    return None
+        return user_token.strip(), "request:cookie_or_bearer"
+    return None, "none"
 
 
-def _sandbox_response() -> DiscoveryResponse:
+def _sandbox_response(reason: str) -> DiscoveryResponse:
+    logger.warning("Discovery sandbox fallback: %s", reason)
     return DiscoveryResponse(
         models=list(SANDBOX_DEFAULTS["models"]),
         mcp_servers=[NamedEntry(**e) for e in SANDBOX_DEFAULTS["mcp_servers"]],
         tools=[NamedEntry(**e) for e in SANDBOX_DEFAULTS["tools"]],
         discovery_active=False,
         source="sandbox",
+        degraded_reason=reason,
     )
 
 
@@ -173,15 +179,31 @@ async def _fetch_live_platform(token: str) -> DiscoveryResponse:
 
 async def fetch_platform_capabilities(user_token: Optional[str]) -> DiscoveryResponse:
     """Resolve auth token and query Agent Studio, soft-degrading to sandbox on failure."""
-    token = _resolve_token(user_token)
+    token, token_source = _resolve_token(user_token)
     if not token:
-        return _sandbox_response()
+        return _sandbox_response(
+            "no_auth_token (set CLOUDERA_AI_TOKEN on the backend, or pass _cdswuserstoken "
+            "cookie / Authorization: Bearer header from a logged-in Cloudera AI session)"
+        )
 
     try:
         return await _fetch_live_platform(token)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        try:
+            body = exc.response.json()
+            detail = body.get("reason") or body.get("error") or str(body)[:120]
+        except Exception:
+            detail = exc.response.text[:120]
+        return _sandbox_response(
+            f"platform_http_{status} via {token_source} ({detail})"
+        )
+    except httpx.TimeoutException:
+        return _sandbox_response(
+            f"platform_timeout after {DISCOVERY_TIMEOUT_S}s via {token_source}"
+        )
     except Exception as exc:
-        logger.warning("Discovery soft-degrade to sandbox: %s", exc)
-        return _sandbox_response()
+        return _sandbox_response(f"platform_error via {token_source} ({type(exc).__name__}: {exc})")
 
 
 async def _run_discovery_probe(token: str) -> dict[str, Any]:
@@ -223,6 +245,6 @@ if __name__ == "__main__":
         print(json.dumps(result, indent=2))
     except Exception as exc:
         print(f"Platform error (falling back to sandbox): {exc}", file=sys.stderr)
-        sandbox = _sandbox_response()
+        sandbox = _sandbox_response(f"probe_failed ({exc})")
         print(json.dumps(sandbox.model_dump(), indent=2))
         sys.exit(1)
