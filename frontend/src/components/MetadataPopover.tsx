@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   upsertMetadata,
   type MetadataRecord,
+  type SuggestWorkflow,
 } from "../api";
 
 const DEBOUNCE_MS = 400;
@@ -12,6 +13,8 @@ export interface MetadataTarget {
   title: string;
   variant?: "default" | "proposed";
   rationale?: string;
+  groupNodeIds?: string[];
+  workflow?: SuggestWorkflow | null;
 }
 
 interface Props {
@@ -20,6 +23,7 @@ interface Props {
   initial: MetadataRecord;
   onClose: () => void;
   onSaved: (ownerType: "node" | "group", ownerId: string, meta: MetadataRecord) => void;
+  onRejectProposal?: (nodeIds: string[]) => Promise<void>;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -30,9 +34,12 @@ export default function MetadataPopover({
   initial,
   onClose,
   onSaved,
+  onRejectProposal,
 }: Props) {
   const [form, setForm] = useState<MetadataRecord>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef(form);
 
@@ -40,6 +47,7 @@ export default function MetadataPopover({
     setForm(initial);
     latest.current = initial;
     setSaveState("idle");
+    setRejectError(null);
   }, [target?.ownerId, target?.ownerType, initial]);
 
   const persist = useCallback(
@@ -80,12 +88,29 @@ export default function MetadataPopover({
     });
   };
 
+  const handleReject = async () => {
+    if (!target?.groupNodeIds?.length || !onRejectProposal) return;
+    setRejectBusy(true);
+    setRejectError(null);
+    try {
+      await onRejectProposal(target.groupNodeIds);
+      onClose();
+    } catch (e) {
+      setRejectError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRejectBusy(false);
+    }
+  };
+
   if (!target) return null;
 
   const isProposed = target.variant === "proposed";
+  const isGroupCharter = target.ownerType === "group";
+  const workflow = target.workflow;
+  const leadAgent = workflow?.agents[0];
 
   const statusLabel =
-    isProposed
+    isProposed || isGroupCharter
       ? ""
       : saveState === "saving"
       ? "Saving…"
@@ -96,30 +121,107 @@ export default function MetadataPopover({
       : "";
 
   return (
-    <aside className="metadata-popover" role="dialog" aria-label="Metadata editor">
+    <aside
+      className="metadata-popover"
+      role="dialog"
+      aria-label={isGroupCharter ? "Project charter" : "Metadata editor"}
+    >
       <div className="metadata-popover__header">
-        <h3>{target.title}</h3>
+        <h3>{isGroupCharter ? "Project Charter" : target.title}</h3>
         <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
           ×
         </button>
       </div>
-      {isProposed ? (
+
+      {isGroupCharter && isProposed ? (
         <>
-          <p className="metadata-popover__hint">AI-generated optimization proposal.</p>
+          <p className="metadata-popover__hint">System Architect review — AI optimization proposal.</p>
           <div className="metadata-field">
-            <span>Rationale</span>
-            <p className="metadata-rationale">{target.rationale ?? initial.description ?? "—"}</p>
+            <span>Proposed Agent Fleet Name</span>
+            <p className="metadata-rationale">
+              {workflow?.workflow_name ?? form.name ?? "—"}
+            </p>
           </div>
+          <div className="metadata-field">
+            <span>Assigned Operational Goal</span>
+            <p className="metadata-rationale">
+              {leadAgent?.goal ?? workflow?.tasks[0]?.description ?? form.description ?? "—"}
+            </p>
+          </div>
+          <div className="metadata-field">
+            <span>Agent Role Backstory</span>
+            <p className="metadata-rationale">{leadAgent?.backstory ?? form.owner ?? "—"}</p>
+          </div>
+          <div className="metadata-field">
+            <span>Assigned Platform Tools</span>
+            <p className="metadata-rationale">
+              {leadAgent?.tools?.length ? leadAgent.tools.join(", ") : "—"}
+            </p>
+          </div>
+          {target.rationale && (
+            <div className="metadata-field">
+              <span>Optimization Rationale</span>
+              <p className="metadata-rationale">{target.rationale}</p>
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn btn--reject"
+            disabled={rejectBusy || !target.groupNodeIds?.length}
+            onClick={() => void handleReject()}
+          >
+            {rejectBusy ? "Rejecting…" : "Reject Proposal"}
+          </button>
+          {rejectError && <p className="metadata-popover__status metadata-popover__status--error">{rejectError}</p>}
           <button type="button" className="btn btn--agentic" disabled title="Available in Step 5d">
             Agentic Options
           </button>
+        </>
+      ) : isGroupCharter ? (
+        <>
+          <p className="metadata-popover__hint">Executive governance charter — changes save automatically.</p>
+          <label className="metadata-field">
+            <span>Proposed Agent Fleet Name</span>
+            <input
+              type="text"
+              value={form.name ?? ""}
+              onChange={(e) => update("name", e.target.value || null)}
+            />
+          </label>
+          <label className="metadata-field">
+            <span>Assigned Operational Goal</span>
+            <textarea
+              rows={3}
+              value={form.description ?? ""}
+              onChange={(e) => update("description", e.target.value || null)}
+            />
+          </label>
+          <label className="metadata-field">
+            <span>Agent Role Backstory</span>
+            <input
+              type="text"
+              value={form.owner ?? ""}
+              onChange={(e) => update("owner", e.target.value || null)}
+            />
+          </label>
+          <label className="metadata-field">
+            <span>Assigned Platform Tools</span>
+            <input
+              type="text"
+              value={workflow ? (leadAgent?.tools ?? []).join(", ") : ""}
+              readOnly
+              placeholder="Populated when linked to Agent Studio"
+            />
+          </label>
+          <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
+            {statusLabel}
+          </p>
         </>
       ) : (
         <>
           <p className="metadata-popover__hint">
             Changes save automatically ({target.ownerType}).
           </p>
-
           <label className="metadata-field">
             <span>Name</span>
             <input
@@ -128,7 +230,6 @@ export default function MetadataPopover({
               onChange={(e) => update("name", e.target.value || null)}
             />
           </label>
-
           <label className="metadata-field">
             <span>Owner</span>
             <input
@@ -137,7 +238,6 @@ export default function MetadataPopover({
               onChange={(e) => update("owner", e.target.value || null)}
             />
           </label>
-
           <div className="metadata-field metadata-field--row">
             <label>
               <span>Expected duration</span>
@@ -169,7 +269,6 @@ export default function MetadataPopover({
               </select>
             </label>
           </div>
-
           <label className="metadata-field">
             <span>Description</span>
             <textarea
@@ -178,7 +277,6 @@ export default function MetadataPopover({
               onChange={(e) => update("description", e.target.value || null)}
             />
           </label>
-
           <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
             {statusLabel}
           </p>

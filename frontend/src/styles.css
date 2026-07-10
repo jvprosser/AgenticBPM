@@ -143,6 +143,68 @@ body {
   color: var(--muted);
   font-size: 0.85rem;
   flex: 1;
+  min-width: 0;
+}
+
+.leverage-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+  flex-shrink: 0;
+}
+
+.leverage-metric__label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.leverage-metric__value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #93c5fd;
+  white-space: nowrap;
+}
+
+.canvas--relative {
+  position: relative;
+}
+
+.boundary-toast {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: 92%;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #3b82f6;
+  background: rgba(30, 58, 138, 0.92);
+  color: #dbeafe;
+  font-size: 0.84rem;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.btn--reject {
+  width: 100%;
+  margin-top: 0.5rem;
+  border-color: #ef4444;
+  color: #fecaca;
+}
+
+.btn--reject:hover:not(:disabled) {
+  border-color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
 }
 
 .btn {

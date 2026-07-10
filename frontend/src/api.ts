@@ -216,6 +216,28 @@ export async function suggestOptimization(processId: string): Promise<SuggestRes
   return res.json();
 }
 
+export interface StrategicOverrideResult {
+  id: string;
+  process_id: string;
+  node_ids: string[];
+  created_at: string;
+  purged_proposed_groups: string[];
+}
+
+export async function createStrategicOverride(
+  processId: string,
+  nodeIds: string[]
+): Promise<StrategicOverrideResult> {
+  const res = await fetch(`/api/processes/${processId}/overrides`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ node_ids: nodeIds }),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Override failed"));
+  return res.json();
+}
+
 export async function upsertMetadata(
   processId: string,
   body: MetadataUpsertBody

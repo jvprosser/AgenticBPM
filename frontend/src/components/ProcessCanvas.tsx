@@ -16,6 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   createGroup,
+  createStrategicOverride,
   getDiscovery,
   getProcessGraph,
   suggestOptimization,
@@ -29,6 +30,10 @@ import {
 import BpmnNode, { categoryOf, type BpmnNodeData } from "./BpmnNode";
 import GroupOverlay from "./GroupOverlay";
 import MetadataPopover, { type MetadataTarget } from "./MetadataPopover";
+import {
+  computeHumanLeverageMultiplier,
+  formatLeverageMultiplier,
+} from "../lib/leverage";
 
 const EMPTY_META: MetadataRecord = {
   name: null,
@@ -147,6 +152,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [boundaryToast, setBoundaryToast] = useState<string | null>(null);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -270,7 +276,9 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
   const openGroupTarget = useCallback(
     (groupId: string, variant: "default" | "proposed") => {
       const gg = graph?.groups.find((g) => g.id === groupId);
-      if (!gg) return;
+      if (!gg || !graph) return;
+      const memberIds =
+        gg.node_ids ?? graph.nodes.filter((n) => n.group_id === groupId).map((n) => n.id);
       setMetaTarget({
         ownerType: "group",
         ownerId: groupId,
@@ -280,8 +288,28 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
             : `Agentic group · ${gg.deployment_status}`,
         variant,
         rationale: gg.workflow_definition?.rationale ?? gg.metadata.description ?? undefined,
+        groupNodeIds: memberIds,
+        workflow: gg.workflow_definition ?? null,
       });
     },
+    [graph]
+  );
+
+  const handleRejectProposal = useCallback(
+    async (nodeIds: string[]) => {
+      await createStrategicOverride(processId, nodeIds);
+      setMetaTarget(null);
+      setBoundaryToast(
+        "🛡️ Strategic Boundary Asserted. Workspace locked exclusively for Human Expertise."
+      );
+      await loadGraph();
+      window.setTimeout(() => setBoundaryToast(null), 6000);
+    },
+    [processId, loadGraph]
+  );
+
+  const leverageMultiplier = useMemo(
+    () => (graph ? computeHumanLeverageMultiplier(graph) : 1.0),
     [graph]
   );
 
@@ -399,6 +427,12 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
           {meta?.filename} · {counts.nodes} nodes · {counts.edges} edges ·{" "}
           {counts.lanes} lanes · {counts.groups} groups
         </span>
+        <span className="leverage-metric" title="Human Leverage Multiplier">
+          <span className="leverage-metric__label">Human Leverage Multiplier</span>
+          <span className="leverage-metric__value">
+            {formatLeverageMultiplier(leverageMultiplier)}
+          </span>
+        </span>
         <span className={`save-pill save-pill--${saveState}`}>{saveLabel}</span>
       </div>
       {groupError && <div className="alert alert--error">{groupError}</div>}
@@ -411,8 +445,8 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
       )}
       {!selectMode && !metaTarget && (
         <p className="canvas-hint">
-          Click a node or group for metadata. Right-click an amber AI Suggestion overlay for
-          rationale.
+          Click a node or group for metadata. Right-click an amber AI Suggestion to review the
+          Project Charter and reject proposals.
         </p>
       )}
       {discovery && !discovery.discovery_active && (
@@ -429,7 +463,12 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         </div>
       )}
       <div className="canvas-layout">
-        <div className="canvas">
+        <div className="canvas canvas--relative">
+          {boundaryToast && (
+            <div className="boundary-toast" role="status">
+              {boundaryToast}
+            </div>
+          )}
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -460,6 +499,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
           initial={metaInitial}
           onClose={() => setMetaTarget(null)}
           onSaved={handleMetadataSaved}
+          onRejectProposal={handleRejectProposal}
         />
       </div>
     </div>

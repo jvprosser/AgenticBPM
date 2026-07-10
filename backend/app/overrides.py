@@ -69,3 +69,22 @@ def record_override(
         "created_at": created["created_at"],
         "purged_proposed_groups": proposed_group_ids,
     }
+
+
+def load_forbidden_node_ids(
+    conn: sqlite3.Connection, process_id: str
+) -> list[str]:
+    """Compile deduplicated forbidden node IDs from all strategic overrides."""
+    rows = conn.execute(
+        "SELECT node_ids FROM strategic_override WHERE process_id = ?",
+        (process_id,),
+    ).fetchall()
+    forbidden: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        node_ids = json.loads(row["node_ids"])
+        for node_id in node_ids:
+            if node_id not in seen:
+                seen.add(node_id)
+                forbidden.append(node_id)
+    return forbidden
