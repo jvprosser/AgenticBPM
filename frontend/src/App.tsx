@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import Dropzone from "./components/Dropzone";
 import ProcessCanvas from "./components/ProcessCanvas";
+import CatalogDialog, { CatalogButton } from "./components/CatalogDialog";
 import { getHealth, type HealthResult } from "./api";
 
 export default function App() {
   const [health, setHealth] = useState<HealthResult | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [processId, setProcessId] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   useEffect(() => {
     getHealth()
@@ -18,16 +20,19 @@ export default function App() {
     <div className={processId ? "app app--wide" : "app"}>
       <header className="app__header">
         <h1>Cloudera AI Process Mapper</h1>
-        <span
-          className={`badge ${health ? "badge--ok" : healthError ? "badge--err" : ""}`}
-          title="Backend health"
-        >
-          {health
-            ? `backend ok · v${health.version}`
-            : healthError
-            ? "backend unreachable"
-            : "checking…"}
-        </span>
+        <div className="app__header-actions">
+          <CatalogButton onClick={() => setCatalogOpen(true)} />
+          <span
+            className={`badge ${health ? "badge--ok" : healthError ? "badge--err" : ""}`}
+            title="Backend health"
+          >
+            {health
+              ? `backend ok · v${health.version}`
+              : healthError
+              ? "backend unreachable"
+              : "checking…"}
+          </span>
+        </div>
       </header>
 
       <main className="app__main">
@@ -43,6 +48,7 @@ export default function App() {
           </>
         )}
       </main>
+      <CatalogDialog isOpen={catalogOpen} onClose={() => setCatalogOpen(false)} />
     </div>
   );
 }

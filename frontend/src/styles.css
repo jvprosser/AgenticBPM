@@ -44,6 +44,13 @@ body {
   margin: 0;
 }
 
+.app__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
 .badge {
   font-size: 0.78rem;
   padding: 0.28rem 0.6rem;
@@ -127,7 +134,8 @@ body {
 .canvas-toolbar {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.65rem;
   margin-bottom: 0.75rem;
 }
 

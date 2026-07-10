@@ -29,7 +29,6 @@ import {
 import BpmnNode, { categoryOf, type BpmnNodeData } from "./BpmnNode";
 import GroupOverlay from "./GroupOverlay";
 import MetadataPopover, { type MetadataTarget } from "./MetadataPopover";
-import CatalogDialog, { CatalogButton } from "./CatalogDialog";
 
 const EMPTY_META: MetadataRecord = {
   name: null,
@@ -148,7 +147,6 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
-  const [catalogOpen, setCatalogOpen] = useState(false);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -397,7 +395,6 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         >
           {suggestBusy ? "Analyzing…" : "Suggest optimization"}
         </button>
-        <CatalogButton onClick={() => setCatalogOpen(true)} />
         <span className="canvas-meta">
           {meta?.filename} · {counts.nodes} nodes · {counts.edges} edges ·{" "}
           {counts.lanes} lanes · {counts.groups} groups
@@ -465,7 +462,6 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
           onSaved={handleMetadataSaved}
         />
       </div>
-      <CatalogDialog isOpen={catalogOpen} onClose={() => setCatalogOpen(false)} />
     </div>
   );
 }
