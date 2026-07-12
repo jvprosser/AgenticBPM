@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
+from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 
 config.ensure_dirs()
 db.init_db()
@@ -93,10 +93,32 @@ async def upload_process(file: UploadFile = File(...)) -> dict:
     }
 
 
-@app.get("/api/processes", tags=["ingestion"])
-def list_processes() -> dict:
+class ProcessSummary(BaseModel):
+    id: str
+    filename: str
+    created_at: str
+    leverage_multiplier: float
+    node_count: int
+
+
+class ProcessListResponse(BaseModel):
+    processes: list[ProcessSummary]
+
+
+@app.get("/api/processes", tags=["ingestion"], response_model=ProcessListResponse)
+def list_processes() -> ProcessListResponse:
     with db.get_conn() as conn:
-        return {"processes": ingestion.list_processes(conn)}
+        rows = ingestion.list_processes(conn)
+        enriched = [
+            {
+                **row,
+                "leverage_multiplier": analytics.calculate_leverage_multiplier(
+                    row["id"], conn
+                ),
+            }
+            for row in rows
+        ]
+        return ProcessListResponse(processes=enriched)
 
 
 @app.get("/api/processes/{process_id}", tags=["ingestion"])

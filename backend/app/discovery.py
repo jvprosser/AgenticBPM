@@ -212,6 +212,14 @@ def _dedupe_mcp_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
+def _is_valid_mcp_list_item(item: dict[str, Any]) -> bool:
+    return str(item.get("status", "")).upper() == "VALID"
+
+
+def _eligible_mcp_servers(servers: list[McpServerEntry]) -> list[McpServerEntry]:
+    return [server for server in servers if server.tools]
+
+
 def _parse_tools_from_mcp_detail(payload: dict[str, Any]) -> list[NamedEntry]:
     entries: list[NamedEntry] = []
     for key in ("tools", "toolTemplates", "templates"):
@@ -315,13 +323,17 @@ async def _fetch_mcp_server(
 async def _fetch_mcp_servers_with_tools(
     client: httpx.AsyncClient, token: str, mcp_payload: dict[str, Any]
 ) -> list[McpServerEntry]:
-    items = _dedupe_mcp_items(_raw_mcp_items(mcp_payload))
+    items = [
+        item
+        for item in _dedupe_mcp_items(_raw_mcp_items(mcp_payload))
+        if _is_valid_mcp_list_item(item)
+    ]
     if not items:
         return []
     servers = await asyncio.gather(
         *[_fetch_mcp_server(client, token, item) for item in items]
     )
-    return list(servers)
+    return _eligible_mcp_servers(list(servers))
 
 
 def _sandbox_response(reason: str) -> DiscoveryResponse:
