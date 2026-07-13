@@ -135,9 +135,9 @@ export default function MetadataPopover({
 
       {isGroupCharter && isProposed ? (
         <>
-          <p className="metadata-popover__hint">System Architect review — AI optimization proposal.</p>
+          <p className="metadata-popover__hint">Governance review — AI Assistant Proposal.</p>
           <div className="metadata-field">
-            <span>Proposed Agent Fleet Name</span>
+            <span>Assistant Workflow Name</span>
             <p className="metadata-rationale">
               {workflow?.workflow_name ?? form.name ?? "—"}
             </p>
@@ -149,7 +149,7 @@ export default function MetadataPopover({
             </p>
           </div>
           <div className="metadata-field">
-            <span>Agent Role Backstory</span>
+            <span>Assistant Task Mapping</span>
             <p className="metadata-rationale">{leadAgent?.backstory ?? form.owner ?? "—"}</p>
           </div>
           <div className="metadata-field">
@@ -174,14 +174,14 @@ export default function MetadataPopover({
           </button>
           {rejectError && <p className="metadata-popover__status metadata-popover__status--error">{rejectError}</p>}
           <button type="button" className="btn btn--agentic" disabled title="Available in Step 5d">
-            Agentic Options
+            Assistant Options
           </button>
         </>
       ) : isGroupCharter ? (
         <>
           <p className="metadata-popover__hint">Executive governance charter — changes save automatically.</p>
           <label className="metadata-field">
-            <span>Proposed Agent Fleet Name</span>
+            <span>Assistant Workflow Name</span>
             <input
               type="text"
               value={form.name ?? ""}
@@ -197,7 +197,7 @@ export default function MetadataPopover({
             />
           </label>
           <label className="metadata-field">
-            <span>Agent Role Backstory</span>
+            <span>Assistant Task Mapping</span>
             <input
               type="text"
               value={form.owner ?? ""}

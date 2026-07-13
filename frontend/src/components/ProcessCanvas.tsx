@@ -92,7 +92,7 @@ function toFlow(graph: ProcessGraph): { nodes: Node[]; edges: Edge[] } {
       data: {
         width: bbox.width,
         height: bbox.height,
-        label: isProposed ? "AI Suggestion" : `Agentic underlay · ${g.deployment_status}`,
+        label: isProposed ? "✨ AI Assistant Proposal" : `Assistant Zone · ${g.deployment_status}`,
         groupId: g.id,
         isProposed,
       },
@@ -259,7 +259,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
                 ...n.data,
                 width: computed.width,
                 height: computed.height,
-                label: "AI Suggestion",
+                label: "✨ AI Assistant Proposal",
                 isProposed: true,
               },
             };
@@ -284,8 +284,8 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         ownerId: groupId,
         title:
           variant === "proposed"
-            ? `AI Suggestion · ${gg.workflow_definition?.workflow_name ?? "proposed"}`
-            : `Agentic group · ${gg.deployment_status}`,
+            ? `AI Assistant Proposal · ${gg.workflow_definition?.workflow_name ?? "proposed"}`
+            : `Assistant Group · ${gg.deployment_status}`,
         variant,
         rationale: gg.workflow_definition?.rationale ?? gg.metadata.description ?? undefined,
         groupNodeIds: memberIds,
@@ -300,7 +300,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
       await createStrategicOverride(processId, nodeIds);
       setMetaTarget(null);
       setBoundaryToast(
-        "🛡️ Strategic Boundary Asserted. Workspace locked exclusively for Human Expertise."
+        "🛡️ Operational Boundary Locked. Task sequence designated exclusively for manual human judgment."
       );
       await loadGraph();
       window.setTimeout(() => setBoundaryToast(null), 6000);
@@ -402,9 +402,9 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         <button
           className={`btn${selectMode ? " btn--active" : ""}`}
           onClick={() => setSelectMode((v) => !v)}
-          title="Drag a box on the canvas to select nodes"
+          title="Drag a box on the canvas to define an Assistant Zone"
         >
-          {selectMode ? "Box select (on)" : "Box select"}
+          {selectMode ? "Draw Assistant Zone (on)" : "Draw Assistant Zone"}
         </button>
         <button
           className="btn btn--accent"
@@ -413,7 +413,7 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
         >
           {groupBusy
             ? "Creating…"
-            : `Create agentic group (${selectedIds.length})`}
+            : `Create Assistant Group (${selectedIds.length})`}
         </button>
         <button
           className="btn btn--suggest"
@@ -439,13 +439,13 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
       {suggestError && <div className="alert alert--error">{suggestError}</div>}
       {selectMode && (
         <p className="canvas-hint">
-          Drag a rectangle over nodes to select them, then click Create agentic group.
-          Selection may span lanes. Turn off box select to click nodes for metadata.
+          Drag a rectangle over nodes to select them, then click Create Assistant Group.
+          Selection may span lanes. Turn off Draw Assistant Zone to click nodes for metadata.
         </p>
       )}
       {!selectMode && !metaTarget && (
         <p className="canvas-hint">
-          Click a node or group for metadata. Right-click an amber AI Suggestion to review the
+          Click a node or Assistant Group for metadata. Right-click an amber AI Assistant Proposal to review the
           Project Charter and reject proposals.
         </p>
       )}
