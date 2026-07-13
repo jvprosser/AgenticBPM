@@ -1,156 +1,194 @@
-"""Step 5c — draft optimization generation with dynamic context injection."""
+"""Step 5c — optimization via Cloudera Agent Studio executeAgent gateway."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import Any, Optional
 
-from . import discovery, groups, ingestion, metadata as metadata_svc, overrides
+import httpx
+
+from . import config, discovery, groups, ingestion, metadata as metadata_svc, overrides
 from .schemas import validate_workflow_oracle
+from .schemas.optimization import (
+    ExecuteAgentRequest,
+    INSTRUCTION_INTENT,
+    OptimizationDataset,
+    SYSTEM_MANDATE,
+)
 
 _BBOX_PAD = 20.0
 _NODE_W = 180.0
 _NODE_H = 80.0
 
-_AUX_LABEL_KEYWORDS = ("document", "notify", "archive", "email", "script", "report")
+_AGENT_EXECUTE_TIMEOUT_S = float(
+    __import__("os").environ.get("AGENT_EXECUTE_TIMEOUT_S", "60")
+)
+
+_WORKFLOW_FIELDS = frozenset(
+    {
+        "workflow_name",
+        "type",
+        "manager_agent",
+        "planning",
+        "agents",
+        "tasks",
+        "confidence",
+        "rationale",
+    }
+)
+
+_TARGET_ID_KEYS = (
+    "target_node_ids",
+    "node_ids",
+    "optimization_targets",
+    "group_node_ids",
+)
 
 
-def _duration_minutes(meta: dict) -> float:
-    value = meta.get("duration_value")
-    if value is None:
-        return 0.0
-    unit = meta.get("duration_unit") or "minutes"
-    if unit == "hours":
-        return float(value) * 60.0
-    if unit == "days":
-        return float(value) * 1440.0
-    return float(value)
+def _compile_graph_nodes(graph: dict) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": n["id"],
+            "label": n.get("label"),
+            "type": n.get("type"),
+            "x": n["x"],
+            "y": n["y"],
+            "lane_id": n.get("lane_id"),
+            "group_id": n.get("group_id"),
+            "metadata": n.get("metadata") or {},
+        }
+        for n in graph["nodes"]
+    ]
 
 
-def _eligible_nodes(graph: dict, forbidden_node_ids: list[str]) -> list[dict]:
+def _compile_graph_edges(graph: dict) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": e["id"],
+            "source_node_id": e["source_node_id"],
+            "target_node_id": e["target_node_id"],
+            "label": e.get("label"),
+        }
+        for e in graph["edges"]
+    ]
+
+
+def _compile_active_capabilities(
+    capabilities: discovery.DiscoveryResponse,
+) -> dict[str, Any]:
+    return {
+        "discovery_active": capabilities.discovery_active,
+        "source": capabilities.source,
+        "default_model": capabilities.default_model,
+        "models": capabilities.models,
+        "tools": [entry.model_dump() for entry in capabilities.tools],
+        "mcp_servers": [entry.model_dump() for entry in capabilities.mcp_servers],
+    }
+
+
+def _build_execute_agent_request(
+    process_id: str,
+    graph: dict,
+    capabilities: discovery.DiscoveryResponse,
+    forbidden_node_ids: list[str],
+) -> dict[str, Any]:
+    payload = ExecuteAgentRequest(
+        instruction_intent=INSTRUCTION_INTENT,
+        system_mandate=SYSTEM_MANDATE,
+        dataset=OptimizationDataset(
+            process_id=process_id,
+            graph_nodes=_compile_graph_nodes(graph),
+            graph_edges=_compile_graph_edges(graph),
+            active_capabilities=_compile_active_capabilities(capabilities),
+            strategic_overrides=forbidden_node_ids,
+        ),
+    )
+    return payload.model_dump()
+
+
+def _collect_target_ids(container: dict[str, Any]) -> list[str]:
+    for key in _TARGET_ID_KEYS:
+        value = container.get(key)
+        if isinstance(value, list):
+            ids = [str(item) for item in value if item]
+            if ids:
+                return ids
+    return []
+
+
+def _extract_workflow_dict(container: dict[str, Any]) -> dict[str, Any]:
+    for key in ("blueprint", "workflow", "workflow_definition", "result"):
+        nested = container.get(key)
+        if isinstance(nested, dict) and nested.get("workflow_name"):
+            return nested
+    if container.get("workflow_name"):
+        return {key: container[key] for key in _WORKFLOW_FIELDS if key in container}
+    return {}
+
+
+def _parse_agent_response(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Normalize executeAgent response into workflow dict and target node IDs."""
+    if not isinstance(raw, dict):
+        raise ValueError("Agent gateway returned a non-object JSON payload.")
+
+    candidates: list[dict[str, Any]] = [raw]
+    for key in ("data", "result", "response", "output"):
+        nested = raw.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+    workflow: dict[str, Any] = {}
+    target_node_ids: list[str] = []
+    for candidate in candidates:
+        if not target_node_ids:
+            target_node_ids = _collect_target_ids(candidate)
+        if not workflow:
+            workflow = _extract_workflow_dict(candidate)
+
+    if not workflow:
+        raise ValueError(
+            "Agent gateway response did not include an AgentStudioWorkflow blueprint."
+        )
+    return workflow, target_node_ids
+
+
+def _pipeline_score(metadata: dict[str, Any]) -> int:
+    sources = metadata.get("data_sources") or []
+    score = sum(
+        1
+        for entry in sources
+        if isinstance(entry, dict)
+        and (str(entry.get("source_name") or "").strip() or str(entry.get("human_procedure") or "").strip())
+    )
+    if str(metadata.get("output_end_product") or "").strip():
+        score += 1
+    return score
+
+
+def _fallback_target_nodes(graph: dict, forbidden_node_ids: list[str]) -> list[str]:
+    """Local fallback when the agent blueprint omits explicit target node IDs."""
     forbidden = set(forbidden_node_ids)
-    return [n for n in graph["nodes"] if n["id"] not in forbidden]
+    eligible = [n for n in graph["nodes"] if n["id"] not in forbidden]
+    if not eligible:
+        return []
 
-
-def _select_target_nodes(graph: dict, forbidden_node_ids: list[str]) -> list[str]:
-    """Prefer high-duration / SLA-heavy nodes that are not strategically forbidden."""
-    nodes = _eligible_nodes(graph, forbidden_node_ids)
     ranked = sorted(
-        nodes,
+        eligible,
         key=lambda n: (
-            _duration_minutes(n.get("metadata") or {}),
+            _pipeline_score(n.get("metadata") or {}),
             "task" in (n.get("type") or "").lower(),
         ),
         reverse=True,
     )
-    with_duration = [
-        n["id"]
-        for n in ranked
-        if _duration_minutes(n.get("metadata") or {}) > 0
-    ]
-    if with_duration:
-        return with_duration[:4]
+    rich = [n["id"] for n in ranked if _pipeline_score(n.get("metadata") or {}) > 0]
+    if rich:
+        return rich[:4]
 
-    task_nodes = [
-        n["id"] for n in ranked if "task" in (n.get("type") or "").lower()
-    ]
+    task_nodes = [n["id"] for n in ranked if "task" in (n.get("type") or "").lower()]
     if task_nodes:
         return task_nodes[:3]
 
     return [n["id"] for n in ranked[:3]]
-
-
-def _select_alternative_nodes(graph: dict, forbidden_node_ids: list[str]) -> list[str]:
-    """Divert to auxiliary/documentation-style nodes when SLA targets are forbidden."""
-    candidates = _eligible_nodes(graph, forbidden_node_ids)
-    if not candidates:
-        return []
-
-    auxiliary = [
-        n
-        for n in candidates
-        if any(
-            keyword in (n.get("label") or n.get("source_ref") or "").lower()
-            for keyword in _AUX_LABEL_KEYWORDS
-        )
-    ]
-    if auxiliary:
-        return [auxiliary[0]["id"]]
-
-    task_nodes = [
-        n["id"] for n in candidates if "task" in (n.get("type") or "").lower()
-    ]
-    if task_nodes:
-        return task_nodes[:2]
-
-    return [candidates[0]["id"]]
-
-
-def _build_governance_block(forbidden_node_ids: list[str]) -> str:
-    if not forbidden_node_ids:
-        return ""
-    return (
-        "=== HUMAN GOVERNANCE & STRATEGIC BOUNDARY OVERRIDES ===\n"
-        "The human system architect has explicitly forbidden autonomous automation "
-        "across the following node configurations.\n"
-        "You are STRICTLY PROHIBITED from proposing agentic groups, tasks, or bounding "
-        "boxes that completely or partially include any of these node IDs:\n"
-        f"{json.dumps(forbidden_node_ids)}\n"
-        "If your optimization would intersect any forbidden node, gracefully divert to "
-        "alternative, non-overlapping task patterns (such as auxiliary text processing "
-        "or adjacent documentation nodes) instead.\n\n"
-    )
-
-
-def _build_prompt_context(
-    graph: dict,
-    capabilities: discovery.DiscoveryResponse,
-    forbidden_node_ids: list[str],
-) -> str:
-    layout = {
-        "process": graph["process"],
-        "nodes": [
-            {
-                "id": n["id"],
-                "label": n.get("label"),
-                "type": n.get("type"),
-                "x": n["x"],
-                "y": n["y"],
-                "metadata": n.get("metadata"),
-            }
-            for n in graph["nodes"]
-        ],
-        "edges": graph["edges"],
-    }
-    telemetry = {
-        "total_nodes": len(graph["nodes"]),
-        "nodes_with_duration": sum(
-            1
-            for n in graph["nodes"]
-            if (n.get("metadata") or {}).get("duration_value") is not None
-        ),
-        "sum_duration_minutes": sum(
-            _duration_minutes(n.get("metadata") or {}) for n in graph["nodes"]
-        ),
-        "forbidden_node_count": len(forbidden_node_ids),
-    }
-    capabilities_block = capabilities.model_dump()
-    governance = _build_governance_block(forbidden_node_ids)
-    return (
-        governance
-        + "Analyze the BPMN subprocess and propose a Cloudera Agent Studio workflow.\n\n"
-        f"LAYOUT_JSON:\n{json.dumps(layout, indent=2)}\n\n"
-        f"TELEMETRY:\n{json.dumps(telemetry, indent=2)}\n\n"
-        f"CAPABILITY_MATRIX:\n{json.dumps(capabilities_block, indent=2)}"
-    )
-
-
-def _pick_tools(capabilities: discovery.DiscoveryResponse) -> list[str]:
-    names = [t.name for t in capabilities.tools]
-    if names:
-        return names[:2]
-    return ["code_execution", "vector_search"]
 
 
 def _assert_no_forbidden_overlap(
@@ -163,84 +201,31 @@ def _assert_no_forbidden_overlap(
         )
 
 
-def _mock_inference_response(
-    graph: dict,
-    target_node_ids: list[str],
-    capabilities: discovery.DiscoveryResponse,
-    forbidden_node_ids: list[str],
-    *,
-    system_prompt: str,
-) -> dict[str, Any]:
-    """Phase 1 stub — respects governance block and excludes forbidden nodes."""
-    del system_prompt  # reserved for live Azure OpenAI / Cloudera AI Inference wiring
-    _assert_no_forbidden_overlap(target_node_ids, forbidden_node_ids)
-
-    id_to_node = {n["id"]: n for n in graph["nodes"]}
-    labels = [
-        id_to_node[nid].get("label") or id_to_node[nid].get("source_ref", nid)
-        for nid in target_node_ids
-        if nid in id_to_node
-    ]
-    tools = _pick_tools(capabilities)
-    task_summary = ", ".join(labels) if labels else "selected subprocess"
-    diverted = bool(forbidden_node_ids)
-
-    workflow_name = (
-        "Auxiliary Processing Agent Workflow"
-        if diverted
-        else "SLA Triage Agent Workflow"
-    )
-    goal = (
-        f"Automate adjacent auxiliary steps without touching forbidden nodes: {task_summary}"
-        if diverted
-        else f"Automate high-duration steps: {task_summary}"
-    )
-    task_desc = (
-        f"Process documentation and auxiliary tasks covering: {task_summary}. "
-        "Remain strictly outside all forbidden strategic boundary node IDs."
-        if diverted
-        else (
-            f"Review and automate the grouped subprocess covering: {task_summary}. "
-            "Prioritize nodes with the highest expected duration and SLA exposure."
+async def _execute_optimization_agent(token: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await discovery.post_platform_json(
+            config.EXECUTE_AGENT_PATH,
+            token,
+            body,
+            timeout=_AGENT_EXECUTE_TIMEOUT_S,
         )
-    )
-    rationale = (
-        f"Strategic boundary overrides forbid {len(forbidden_node_ids)} node(s). "
-        f"Diverted optimization to non-overlapping alternative pattern: {task_summary}."
-        if diverted
-        else (
-            f"Selected {len(target_node_ids)} node(s) with the highest duration telemetry "
-            f"({task_summary}). These steps dominate labor-hours and are prime candidates "
-            "for Agent Studio task automation using discovered platform tools."
-        )
-    )
-
-    return {
-        "workflow_name": workflow_name,
-        "type": "task",
-        "manager_agent": True,
-        "planning": True,
-        "agents": [
-            {
-                "name": "Triage Orchestrator",
-                "role": "Process Automation Lead",
-                "goal": goal,
-                "backstory": (
-                    "Specializes in insurance claims triage while honoring human "
-                    "governance boundaries on forbidden automation zones."
-                ),
-                "tools": tools,
-            }
-        ],
-        "tasks": [
-            {
-                "description": task_desc,
-                "agent": "Triage Orchestrator",
-            }
-        ],
-        "confidence": 0.82,
-        "rationale": rationale,
-    }
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        try:
+            detail = exc.response.json()
+            message = detail.get("reason") or detail.get("error") or str(detail)[:200]
+        except Exception:
+            message = exc.response.text[:200]
+        raise ValueError(
+            f"Cloudera Agent gateway HTTP {status} from {config.DISCOVERY_BASE_URL}"
+            f"{config.EXECUTE_AGENT_PATH}: {message}"
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise ValueError(
+            f"Cloudera Agent gateway timed out after {_AGENT_EXECUTE_TIMEOUT_S}s."
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ValueError(f"Cloudera Agent gateway unreachable: {exc}") from exc
 
 
 def _compute_bbox(rows: list[sqlite3.Row]) -> dict[str, float]:
@@ -263,27 +248,29 @@ async def generate_suggestion(
     if graph is None:
         raise ValueError("Process not found.")
 
-    forbidden_node_ids = overrides.load_forbidden_node_ids(conn, process_id)
+    token, token_source = discovery.resolve_platform_token(user_token)
+    if not token:
+        raise ValueError(
+            "No platform auth token available. Set CLOUDERA_AI_TOKEN on the backend "
+            "or pass _cdswuserstoken / Authorization: Bearer from a logged-in session."
+        )
 
+    forbidden_node_ids = overrides.load_forbidden_node_ids(conn, process_id)
     capabilities = await discovery.fetch_platform_capabilities(user_token)
     allowed_tools = {t.name for t in capabilities.tools}
 
-    target_node_ids = _select_target_nodes(graph, forbidden_node_ids)
-    if not target_node_ids and forbidden_node_ids:
-        target_node_ids = _select_alternative_nodes(graph, forbidden_node_ids)
+    execute_body = _build_execute_agent_request(
+        process_id, graph, capabilities, forbidden_node_ids
+    )
+    agent_raw = await _execute_optimization_agent(token, execute_body)
+    raw_proposal, target_node_ids = _parse_agent_response(agent_raw)
+
     if not target_node_ids:
-        raise ValueError("Process has no nodes to optimize.")
+        target_node_ids = _fallback_target_nodes(graph, forbidden_node_ids)
+    if not target_node_ids:
+        raise ValueError("Agent gateway returned no optimizable nodes for this process.")
 
     _assert_no_forbidden_overlap(target_node_ids, forbidden_node_ids)
-
-    system_prompt = _build_prompt_context(graph, capabilities, forbidden_node_ids)
-    raw_proposal = _mock_inference_response(
-        graph,
-        target_node_ids,
-        capabilities,
-        forbidden_node_ids,
-        system_prompt=system_prompt,
-    )
 
     workflow = validate_workflow_oracle(
         raw_proposal,
@@ -296,6 +283,9 @@ async def generate_suggestion(
         f"SELECT id, x, y FROM node WHERE process_id = ? AND id IN ({placeholders})",
         [process_id, *target_node_ids],
     ).fetchall()
+    if len(node_rows) != len(target_node_ids):
+        raise ValueError("Agent gateway targeted one or more unknown node IDs.")
+
     bbox = _compute_bbox(node_rows)
 
     group = groups.create_proposed_group(
@@ -319,6 +309,8 @@ async def generate_suggestion(
 
     return {
         "discovery_active": capabilities.discovery_active,
+        "agent_gateway": config.DISCOVERY_BASE_URL.rstrip("/") + config.EXECUTE_AGENT_PATH,
+        "token_source": token_source,
         "group_id": group["id"],
         "node_ids": target_node_ids,
         "bbox": bbox,

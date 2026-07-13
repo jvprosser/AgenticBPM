@@ -283,6 +283,23 @@ def _apply_mcp_baselines(mcp_servers: list[McpServerEntry]) -> list[McpServerEnt
     return [_mcp_server_from_dict(e) for e in PLATFORM_BASELINES["mcp_servers"]]
 
 
+def resolve_platform_token(user_token: Optional[str]) -> tuple[Optional[str], str]:
+    """Shared token resolution for discovery and agent execution."""
+    return _resolve_token(user_token)
+
+
+async def post_platform_json(
+    path: str,
+    token: str,
+    body: dict[str, Any],
+    *,
+    timeout: Optional[float] = None,
+) -> dict[str, Any]:
+    """Authenticated JSON POST to the Cloudera Agent Studio platform."""
+    async with httpx.AsyncClient(timeout=timeout or DISCOVERY_TIMEOUT_S) as client:
+        return await _post_grpc(client, path, token, body)
+
+
 async def _post_grpc(
     client: httpx.AsyncClient,
     path: str,

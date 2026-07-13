@@ -10,6 +10,7 @@ import {
   type NodeTaskMetadata,
 } from "../api";
 import AssistantGroupPopover from "./AssistantGroupPopover";
+import SourceNameTypeahead from "./SourceNameTypeahead";
 
 const DEBOUNCE_MS = 400;
 
@@ -189,7 +190,7 @@ export default function MetadataPopover({
 
           <section className="metadata-section">
             <h4 className="metadata-section__title">
-              Inbound Data Sources &amp; Historical Procedures (Inputs)
+              Data Sources &amp; Procedures (Inputs)
             </h4>
             {nodeForm.data_sources.length === 0 ? (
               <p className="metadata-section__empty">No data sources yet. Add one below.</p>
@@ -199,11 +200,10 @@ export default function MetadataPopover({
                   <li key={index} className="metadata-source-row">
                     <label className="metadata-field">
                       <span>Data source</span>
-                      <input
-                        type="text"
+                      <SourceNameTypeahead
                         value={row.source_name}
                         placeholder='e.g. "Fraud Engine Telemetry"'
-                        onChange={(e) => updateSourceRow(index, "source_name", e.target.value)}
+                        onChange={(next) => updateSourceRow(index, "source_name", next)}
                       />
                     </label>
                     <label className="metadata-field">
@@ -211,7 +211,7 @@ export default function MetadataPopover({
                       <textarea
                         rows={3}
                         value={row.human_procedure}
-                        placeholder="Describe the manual steps people perform on this data source."
+                        placeholder="Describe the steps performed on this data."
                         onChange={(e) => updateSourceRow(index, "human_procedure", e.target.value)}
                       />
                     </label>

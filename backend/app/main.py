@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
+from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, source_suggest, suggest
 from .schemas.metadata import GroupMetadata, NodeTaskMetadata
 
 config.ensure_dirs()
@@ -203,18 +203,41 @@ class MetadataUpsertRequest(BaseModel):
     metadata: dict
 
 
+class SuggestSourcesBody(BaseModel):
+    user_raw_input: str = ""
+
+
+def _resolve_user_token(
+    _cdswuserstoken: Optional[str],
+    authorization: Optional[str],
+) -> Optional[str]:
+    token: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip() or None
+    if not token:
+        token = _cdswuserstoken
+    return token
+
+
 @app.get("/api/discovery", tags=["discovery"])
 async def get_discovery(
     _cdswuserstoken: Optional[str] = Cookie(None),
     authorization: Optional[str] = Header(None),
 ) -> discovery.DiscoveryResponse:
     """Step 5b [Discovery Auth Passthrough]: platform capability matrix with sandbox fallback."""
-    token: Optional[str] = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip() or None
-    if not token:
-        token = _cdswuserstoken
+    token = _resolve_user_token(_cdswuserstoken, authorization)
     return await discovery.fetch_platform_capabilities(token)
+
+
+@app.post("/api/discovery/suggest-sources", tags=["discovery"])
+async def suggest_sources(
+    body: SuggestSourcesBody,
+    _cdswuserstoken: Optional[str] = Cookie(None),
+    authorization: Optional[str] = Header(None),
+) -> list[dict]:
+    """Proxy Task Dialog typeahead intent to the Cloudera Data Broker agent."""
+    token = _resolve_user_token(_cdswuserstoken, authorization)
+    return await source_suggest.suggest_data_sources(body.user_raw_input, token)
 
 
 @app.post("/api/processes/{process_id}/suggest", tags=["agentic"])
@@ -223,12 +246,8 @@ async def suggest_optimization(
     _cdswuserstoken: Optional[str] = Cookie(None),
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    """Step 5c [Draft Optimization]: infer, validate, and persist a proposed agentic group."""
-    token: Optional[str] = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip() or None
-    if not token:
-        token = _cdswuserstoken
+    """Step 5c [Draft Optimization]: dispatch process state to Cloudera executeAgent."""
+    token = _resolve_user_token(_cdswuserstoken, authorization)
     try:
         with db.get_conn() as conn:
             return await suggest.generate_suggestion(conn, process_id, token)

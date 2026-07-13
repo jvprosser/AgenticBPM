@@ -36,6 +36,11 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 
 ALLOWED_SUFFIXES = {".xml", ".bpmn", ".bpmn20.xml", ".xpdl"}
 
+EXECUTE_AGENT_PATH = os.environ.get(
+    "EXECUTE_AGENT_PATH",
+    "/api/v1/executeAgent",
+)
+
 # Cloudera Agent Studio gRPC-over-JSON base URL for Step 5b discovery.
 DISCOVERY_BASE_URL = os.environ.get(
     "DISCOVERY_BASE_URL",

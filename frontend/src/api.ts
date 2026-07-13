@@ -207,6 +207,38 @@ export async function getDiscovery(): Promise<DiscoveryResult> {
   return res.json();
 }
 
+export interface DataSourceSuggestion {
+  source_name: string;
+  match_confidence: number;
+  rationale: string;
+}
+
+export async function suggestDataSources(
+  userRawInput: string
+): Promise<DataSourceSuggestion[]> {
+  const query = userRawInput.trim();
+  if (!query) return [];
+  try {
+    const res = await fetch("/api/discovery/suggest-sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ user_raw_input: query }),
+    });
+    if (!res.ok) return [];
+    const data: unknown = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.filter(
+      (item): item is DataSourceSuggestion =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as DataSourceSuggestion).source_name === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
 export async function uploadProcessFile(file: File): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
