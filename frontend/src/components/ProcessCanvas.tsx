@@ -24,7 +24,11 @@ import {
   type BboxGeometry,
   type DiscoveryResult,
   type GraphGroup,
-  type MetadataRecord,
+  EMPTY_GROUP_METADATA,
+  EMPTY_NODE_TASK_METADATA,
+  isNodeTaskMetadata,
+  type GroupMetadataRecord,
+  type NodeTaskMetadata,
   type ProcessGraph,
 } from "../api";
 import BpmnNode, { categoryOf, type BpmnNodeData } from "./BpmnNode";
@@ -35,13 +39,8 @@ import {
   formatLeverageMultiplier,
 } from "../lib/leverage";
 
-const EMPTY_META: MetadataRecord = {
-  name: null,
-  owner: null,
-  duration_value: null,
-  duration_unit: null,
-  description: null,
-};
+const EMPTY_NODE_META = EMPTY_NODE_TASK_METADATA;
+const EMPTY_GROUP_META = EMPTY_GROUP_METADATA;
 
 const nodeTypes = { bpmn: BpmnNode, groupOverlay: GroupOverlay };
 const SAVE_DEBOUNCE_MS = 250;
@@ -347,19 +346,25 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
     [graph, openGroupTarget]
   );
 
-  const metaInitial = useMemo((): MetadataRecord => {
-    if (!metaTarget || !graph) return EMPTY_META;
-    if (metaTarget.ownerType === "node") {
-      return graph.nodes.find((n) => n.id === metaTarget.ownerId)?.metadata ?? EMPTY_META;
+  const metaInitial = useMemo((): NodeTaskMetadata | GroupMetadataRecord => {
+    if (!metaTarget || !graph) {
+      return metaTarget?.ownerType === "group" ? EMPTY_GROUP_META : EMPTY_NODE_META;
     }
-    return graph.groups.find((g) => g.id === metaTarget.ownerId)?.metadata ?? EMPTY_META;
+    if (metaTarget.ownerType === "node") {
+      return graph.nodes.find((n) => n.id === metaTarget.ownerId)?.metadata ?? EMPTY_NODE_META;
+    }
+    return graph.groups.find((g) => g.id === metaTarget.ownerId)?.metadata ?? EMPTY_GROUP_META;
   }, [metaTarget, graph]);
 
   const handleMetadataSaved = useCallback(
-    (ownerType: "node" | "group", ownerId: string, saved: MetadataRecord) => {
+    (
+      ownerType: "node" | "group",
+      ownerId: string,
+      saved: NodeTaskMetadata | GroupMetadataRecord
+    ) => {
       setGraph((prev) => {
         if (!prev) return prev;
-        if (ownerType === "node") {
+        if (ownerType === "node" && isNodeTaskMetadata(saved)) {
           return {
             ...prev,
             nodes: prev.nodes.map((n) =>
@@ -367,12 +372,15 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
             ),
           };
         }
-        return {
-          ...prev,
-          groups: prev.groups.map((g) =>
-            g.id === ownerId ? { ...g, metadata: saved } : g
-          ),
-        };
+        if (ownerType === "group" && !isNodeTaskMetadata(saved)) {
+          return {
+            ...prev,
+            groups: prev.groups.map((g) =>
+              g.id === ownerId ? { ...g, metadata: saved } : g
+            ),
+          };
+        }
+        return prev;
       });
     },
     []

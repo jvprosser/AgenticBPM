@@ -311,8 +311,10 @@ async def generate_suggestion(
         process_id,
         "group",
         group["id"],
-        name=workflow.workflow_name,
-        description=workflow.rationale,
+        {
+            "name": workflow.workflow_name,
+            "description": workflow.rationale,
+        },
     )
 
     return {

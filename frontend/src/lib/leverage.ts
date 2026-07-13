@@ -1,11 +1,8 @@
-import type { GraphGroup, GraphNode, MetadataRecord, ProcessGraph } from "../api";
+import type { GraphGroup, GraphNode, NodeTaskMetadata, ProcessGraph } from "../api";
 
-export function nodeLaborHours(meta: MetadataRecord): number {
-  if (meta.duration_value == null) return 0;
-  const unit = meta.duration_unit ?? "minutes";
-  if (unit === "hours") return meta.duration_value;
-  if (unit === "days") return meta.duration_value * 24;
-  return meta.duration_value / 60;
+/** Legacy duration telemetry removed from node metadata; leverage uses deployed zones only. */
+export function nodeLaborHours(_meta: NodeTaskMetadata): number {
+  return 0;
 }
 
 export function groupMemberIds(group: GraphGroup, nodes: GraphNode[]): string[] {
@@ -13,7 +10,7 @@ export function groupMemberIds(group: GraphGroup, nodes: GraphNode[]): string[] 
   return nodes.filter((n) => n.group_id === group.id).map((n) => n.id);
 }
 
-/** 1.0x base + 1.5x per 10 labor-hours covered by deployed agentic underlays. */
+/** 1.0x base + 1.5x per 10 labor-hours covered by deployed assistant zones. */
 export function computeHumanLeverageMultiplier(graph: ProcessGraph): number {
   let deployedLaborHours = 0;
   for (const group of graph.groups ?? []) {

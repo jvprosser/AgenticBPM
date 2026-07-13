@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS node (
     lane_id         TEXT REFERENCES lane(id) ON DELETE SET NULL,
     group_id        TEXT REFERENCES "group"(id) ON DELETE SET NULL,
     parent_ref      TEXT,
-    attached_to_ref TEXT
+    attached_to_ref TEXT,
+    metadata_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS edge (
@@ -103,6 +104,13 @@ def _connect() -> sqlite3.Connection:
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate_schema(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    node_cols = {row[1] for row in conn.execute("PRAGMA table_info(node)").fetchall()}
+    if "metadata_json" not in node_cols:
+        conn.execute("ALTER TABLE node ADD COLUMN metadata_json TEXT")
 
 
 @contextmanager

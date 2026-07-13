@@ -15,9 +15,10 @@ from fastapi import Cookie, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
+from .schemas.metadata import GroupMetadata, NodeTaskMetadata
 
 config.ensure_dirs()
 db.init_db()
@@ -196,20 +197,10 @@ def delete_group(process_id: str, group_id: str) -> dict:
     return {"deleted": group_id}
 
 
-class MetadataPayload(BaseModel):
-    """Step 5a fields — all optional on PATCH; omitted fields are stored as null."""
-
-    name: Optional[str] = None
-    owner: Optional[str] = None
-    duration_value: Optional[int] = None
-    duration_unit: Optional[Literal["minutes", "hours", "days"]] = None
-    description: Optional[str] = None
-
-
 class MetadataUpsertRequest(BaseModel):
     owner_type: Literal["node", "group"]
     owner_id: str
-    metadata: MetadataPayload
+    metadata: dict
 
 
 @app.get("/api/discovery", tags=["discovery"])
@@ -251,6 +242,12 @@ async def suggest_optimization(
 def upsert_metadata(process_id: str, body: MetadataUpsertRequest) -> dict:
     """Step 5a [Metadata Persistence]: upsert metadata for a node or group."""
     try:
+        if body.owner_type == "node":
+            validated = NodeTaskMetadata.from_payload(body.metadata)
+            payload = validated.model_dump()
+        else:
+            validated = GroupMetadata.model_validate(body.metadata)
+            payload = validated.model_dump()
         with db.get_conn() as conn:
             if ingestion.get_graph(conn, process_id) is None:
                 raise HTTPException(status_code=404, detail="Process not found.")
@@ -259,8 +256,10 @@ def upsert_metadata(process_id: str, body: MetadataUpsertRequest) -> dict:
                 process_id,
                 body.owner_type,
                 body.owner_id,
-                **body.metadata.model_dump(),
+                payload,
             )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {

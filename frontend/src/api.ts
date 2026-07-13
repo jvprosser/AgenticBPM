@@ -10,12 +10,40 @@ export interface UploadResult {
   layout_source: string;
 }
 
-export interface MetadataRecord {
+export interface DataSourceProcedure {
+  source_name: string;
+  human_procedure: string;
+}
+
+export interface NodeTaskMetadata {
+  data_sources: DataSourceProcedure[];
+  output_end_product: string;
+}
+
+export interface GroupMetadataRecord {
   name: string | null;
   owner: string | null;
-  duration_value: number | null;
-  duration_unit: "minutes" | "hours" | "days" | null;
   description: string | null;
+}
+
+export const EMPTY_NODE_TASK_METADATA: NodeTaskMetadata = {
+  data_sources: [],
+  output_end_product: "",
+};
+
+export const EMPTY_GROUP_METADATA: GroupMetadataRecord = {
+  name: null,
+  owner: null,
+  description: null,
+};
+
+/** @deprecated Legacy alias — node metadata uses {@link NodeTaskMetadata}. */
+export type MetadataRecord = NodeTaskMetadata | GroupMetadataRecord;
+
+export function isNodeTaskMetadata(
+  meta: NodeTaskMetadata | GroupMetadataRecord
+): meta is NodeTaskMetadata {
+  return "data_sources" in meta;
 }
 
 export interface GraphNode {
@@ -29,7 +57,7 @@ export interface GraphNode {
   group_id: string | null;
   parent_ref: string | null;
   attached_to_ref: string | null;
-  metadata: MetadataRecord;
+  metadata: NodeTaskMetadata;
 }
 
 export interface BboxGeometry {
@@ -43,7 +71,7 @@ export interface GraphGroup {
   id: string;
   bbox: BboxGeometry | null;
   deployment_status: string;
-  metadata: MetadataRecord;
+  metadata: GroupMetadataRecord;
   node_ids?: string[];
   workflow_definition?: SuggestWorkflow | null;
 }
@@ -204,7 +232,7 @@ export async function createGroup(
 export interface MetadataUpsertBody {
   owner_type: "node" | "group";
   owner_id: string;
-  metadata: MetadataRecord;
+  metadata: NodeTaskMetadata | GroupMetadataRecord;
 }
 
 export async function suggestOptimization(processId: string): Promise<SuggestResult> {
@@ -241,7 +269,11 @@ export async function createStrategicOverride(
 export async function upsertMetadata(
   processId: string,
   body: MetadataUpsertBody
-): Promise<{ owner_type: string; owner_id: string; metadata: MetadataRecord }> {
+): Promise<{
+  owner_type: string;
+  owner_id: string;
+  metadata: NodeTaskMetadata | GroupMetadataRecord;
+}> {
   const res = await fetch(`/api/processes/${processId}/metadata`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
