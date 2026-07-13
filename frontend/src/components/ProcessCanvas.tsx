@@ -38,6 +38,7 @@ import {
   computeHumanLeverageMultiplier,
   formatLeverageMultiplier,
 } from "../lib/leverage";
+import { aggregatePipelineFromGraph } from "../lib/pipeline";
 
 const EMPTY_NODE_META = EMPTY_NODE_TASK_METADATA;
 const EMPTY_GROUP_META = EMPTY_GROUP_METADATA;
@@ -286,9 +287,9 @@ export default function ProcessCanvas({ processId, onReset }: Props) {
             ? `AI Assistant Proposal · ${gg.workflow_definition?.workflow_name ?? "proposed"}`
             : `Assistant Group · ${gg.deployment_status}`,
         variant,
-        rationale: gg.workflow_definition?.rationale ?? gg.metadata.description ?? undefined,
         groupNodeIds: memberIds,
         workflow: gg.workflow_definition ?? null,
+        aggregatedPipeline: aggregatePipelineFromGraph(graph, memberIds),
       });
     },
     [graph]

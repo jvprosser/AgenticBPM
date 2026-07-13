@@ -67,6 +67,28 @@ export interface BboxGeometry {
   height: number;
 }
 
+export interface AggregatedPipelineTask {
+  id: string;
+  label: string;
+}
+
+export interface AggregatedPipelineSource {
+  source_name: string;
+  human_procedures: string[];
+}
+
+export interface AggregatedPipeline {
+  scope_tasks: AggregatedPipelineTask[];
+  data_sources: AggregatedPipelineSource[];
+  output_products: string[];
+}
+
+export const EMPTY_AGGREGATED_PIPELINE: AggregatedPipeline = {
+  scope_tasks: [],
+  data_sources: [],
+  output_products: [],
+};
+
 export interface GraphGroup {
   id: string;
   bbox: BboxGeometry | null;
@@ -74,6 +96,7 @@ export interface GraphGroup {
   metadata: GroupMetadataRecord;
   node_ids?: string[];
   workflow_definition?: SuggestWorkflow | null;
+  aggregated_pipeline?: AggregatedPipeline;
 }
 
 export interface SuggestAgent {

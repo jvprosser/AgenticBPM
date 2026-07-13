@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   upsertMetadata,
-  EMPTY_GROUP_METADATA,
+  EMPTY_AGGREGATED_PIPELINE,
   EMPTY_NODE_TASK_METADATA,
   isNodeTaskMetadata,
+  type AggregatedPipeline,
   type DataSourceProcedure,
   type GroupMetadataRecord,
   type NodeTaskMetadata,
-  type SuggestWorkflow,
 } from "../api";
+import AssistantGroupPopover from "./AssistantGroupPopover";
 
 const DEBOUNCE_MS = 400;
 
@@ -17,9 +18,9 @@ export interface MetadataTarget {
   ownerId: string;
   title: string;
   variant?: "default" | "proposed";
-  rationale?: string;
   groupNodeIds?: string[];
-  workflow?: SuggestWorkflow | null;
+  workflow?: import("../api").SuggestWorkflow | null;
+  aggregatedPipeline?: AggregatedPipeline;
 }
 
 interface Props {
@@ -50,17 +51,6 @@ function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): 
   return { ...EMPTY_NODE_TASK_METADATA };
 }
 
-function normalizeGroupInitial(initial: NodeTaskMetadata | GroupMetadataRecord): GroupMetadataRecord {
-  if (isNodeTaskMetadata(initial)) {
-    return { ...EMPTY_GROUP_METADATA };
-  }
-  return {
-    name: initial.name ?? null,
-    owner: initial.owner ?? null,
-    description: initial.description ?? null,
-  };
-}
-
 export default function MetadataPopover({
   processId,
   target,
@@ -70,28 +60,19 @@ export default function MetadataPopover({
   onRejectProposal,
 }: Props) {
   const [nodeForm, setNodeForm] = useState<NodeTaskMetadata>(normalizeNodeInitial(initial));
-  const [groupForm, setGroupForm] = useState<GroupMetadataRecord>(normalizeGroupInitial(initial));
   const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [rejectBusy, setRejectBusy] = useState(false);
-  const [rejectError, setRejectError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNode = useRef(nodeForm);
-  const latestGroup = useRef(groupForm);
 
   useEffect(() => {
     const nextNode = normalizeNodeInitial(initial);
-    const nextGroup = normalizeGroupInitial(initial);
     setNodeForm(nextNode);
-    setGroupForm(nextGroup);
     latestNode.current = nextNode;
-    latestGroup.current = nextGroup;
     setSaveState("idle");
-    setRejectError(null);
-    // Reload from server only when the selected owner changes — not after our own saves.
   }, [target?.ownerId, target?.ownerType]);
 
   const persist = useCallback(
-    async (payload: NodeTaskMetadata | GroupMetadataRecord) => {
+    async (payload: NodeTaskMetadata) => {
       if (!target) return;
       setSaveState("saving");
       try {
@@ -119,28 +100,6 @@ export default function MetadataPopover({
     },
     [persist]
   );
-
-  const scheduleGroupSave = useCallback(
-    (next: GroupMetadataRecord) => {
-      latestGroup.current = next;
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        void persist(latestGroup.current);
-      }, DEBOUNCE_MS);
-    },
-    [persist]
-  );
-
-  const updateGroup = <K extends keyof GroupMetadataRecord>(
-    key: K,
-    value: GroupMetadataRecord[K]
-  ) => {
-    setGroupForm((prev) => {
-      const next = { ...prev, [key]: value };
-      scheduleGroupSave(next);
-      return next;
-    });
-  };
 
   const updateNodeForm = (
     updater: (prev: NodeTaskMetadata) => NodeTaskMetadata,
@@ -187,31 +146,11 @@ export default function MetadataPopover({
     }));
   };
 
-  const handleReject = async () => {
-    if (!target?.groupNodeIds?.length || !onRejectProposal) return;
-    setRejectBusy(true);
-    setRejectError(null);
-    try {
-      await onRejectProposal(target.groupNodeIds);
-      onClose();
-    } catch (e) {
-      setRejectError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRejectBusy(false);
-    }
-  };
-
   if (!target) return null;
 
-  const isProposed = target.variant === "proposed";
-  const isGroupCharter = target.ownerType === "group";
-  const workflow = target.workflow;
-  const leadAgent = workflow?.agents[0];
-
+  const isGroupPanel = target.ownerType === "group";
   const statusLabel =
-    isProposed
-      ? ""
-      : saveState === "saving"
+    saveState === "saving"
       ? "Saving…"
       : saveState === "saved"
       ? "Saved"
@@ -223,103 +162,26 @@ export default function MetadataPopover({
     <aside
       className="metadata-popover"
       role="dialog"
-      aria-label={isGroupCharter ? "Project charter" : "Task data mechanics"}
+      aria-label={isGroupPanel ? "Assistant group consolidation" : "Task data mechanics"}
     >
-      <div className="metadata-popover__header">
-        <h3>{isGroupCharter ? "Project Charter" : target.title}</h3>
-        <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-      </div>
-
-      {isGroupCharter && isProposed ? (
-        <>
-          <p className="metadata-popover__hint">Governance review — AI Assistant Proposal.</p>
-          <div className="metadata-field">
-            <span>Assistant Workflow Name</span>
-            <p className="metadata-rationale">
-              {workflow?.workflow_name ?? groupForm.name ?? "—"}
-            </p>
-          </div>
-          <div className="metadata-field">
-            <span>Assigned Operational Goal</span>
-            <p className="metadata-rationale">
-              {leadAgent?.goal ?? workflow?.tasks[0]?.description ?? groupForm.description ?? "—"}
-            </p>
-          </div>
-          <div className="metadata-field">
-            <span>Assistant Task Mapping</span>
-            <p className="metadata-rationale">{leadAgent?.backstory ?? groupForm.owner ?? "—"}</p>
-          </div>
-          <div className="metadata-field">
-            <span>Assigned Platform Tools</span>
-            <p className="metadata-rationale">
-              {leadAgent?.tools?.length ? leadAgent.tools.join(", ") : "—"}
-            </p>
-          </div>
-          {target.rationale && (
-            <div className="metadata-field">
-              <span>Optimization Rationale</span>
-              <p className="metadata-rationale">{target.rationale}</p>
-            </div>
-          )}
-          <button
-            type="button"
-            className="btn btn--reject"
-            disabled={rejectBusy || !target.groupNodeIds?.length}
-            onClick={() => void handleReject()}
-          >
-            {rejectBusy ? "Rejecting…" : "Reject Proposal"}
-          </button>
-          {rejectError && (
-            <p className="metadata-popover__status metadata-popover__status--error">{rejectError}</p>
-          )}
-          <button type="button" className="btn btn--agentic" disabled title="Available in Step 5d">
-            Assistant Options
-          </button>
-        </>
-      ) : isGroupCharter ? (
-        <>
-          <p className="metadata-popover__hint">Executive governance charter — changes save automatically.</p>
-          <label className="metadata-field">
-            <span>Assistant Workflow Name</span>
-            <input
-              type="text"
-              value={groupForm.name ?? ""}
-              onChange={(e) => updateGroup("name", e.target.value || null)}
-            />
-          </label>
-          <label className="metadata-field">
-            <span>Assigned Operational Goal</span>
-            <textarea
-              rows={3}
-              value={groupForm.description ?? ""}
-              onChange={(e) => updateGroup("description", e.target.value || null)}
-            />
-          </label>
-          <label className="metadata-field">
-            <span>Assistant Task Mapping</span>
-            <input
-              type="text"
-              value={groupForm.owner ?? ""}
-              onChange={(e) => updateGroup("owner", e.target.value || null)}
-            />
-          </label>
-          <label className="metadata-field">
-            <span>Assigned Platform Tools</span>
-            <input
-              type="text"
-              value={workflow ? (leadAgent?.tools ?? []).join(", ") : ""}
-              readOnly
-              placeholder="Populated when linked to Agent Studio"
-            />
-          </label>
-          <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
-            {statusLabel}
-          </p>
-        </>
+      {isGroupPanel ? (
+        <AssistantGroupPopover
+          title={target.title}
+          variant={target.variant ?? "default"}
+          pipeline={target.aggregatedPipeline ?? EMPTY_AGGREGATED_PIPELINE}
+          workflow={target.workflow}
+          groupNodeIds={target.groupNodeIds}
+          onClose={onClose}
+          onRejectProposal={onRejectProposal}
+        />
       ) : (
         <>
+          <div className="metadata-popover__header">
+            <h3>{target.title}</h3>
+            <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
+              ×
+            </button>
+          </div>
           <p className="metadata-popover__hint">
             List required data sources with associated actions and the output from this task.
             Changes save automatically.
@@ -345,7 +207,7 @@ export default function MetadataPopover({
                       />
                     </label>
                     <label className="metadata-field">
-                      <span>Historical human procedure</span>
+                      <span>Corresponding process</span>
                       <textarea
                         rows={3}
                         value={row.human_procedure}

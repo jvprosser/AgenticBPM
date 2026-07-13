@@ -510,6 +510,96 @@ body {
   background: rgba(239, 68, 68, 0.1);
 }
 
+.pipeline-scope-list,
+.pipeline-procedure-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.pipeline-source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pipeline-accordion {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 32, 0.55);
+  overflow: hidden;
+}
+
+.pipeline-accordion__summary {
+  cursor: pointer;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #93c5fd;
+  list-style: none;
+}
+
+.pipeline-accordion__summary::-webkit-details-marker {
+  display: none;
+}
+
+.pipeline-accordion__body {
+  padding: 0 0.7rem 0.65rem;
+}
+
+.pipeline-outputs {
+  margin-top: 0.75rem;
+}
+
+.pipeline-outputs__label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.workflow-blueprint {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.workflow-blueprint__lead {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.workflow-blueprint__block {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.workflow-blueprint__label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.workflow-blueprint__meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .group-overlay {
   border: 2px dashed #a855f7;
   border-radius: 12px;

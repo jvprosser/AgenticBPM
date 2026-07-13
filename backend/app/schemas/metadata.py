@@ -51,3 +51,19 @@ class GroupMetadata(BaseModel):
     name: Optional[str] = None
     owner: Optional[str] = None
     description: Optional[str] = None
+
+
+class AggregatedPipelineTask(BaseModel):
+    id: str
+    label: str
+
+
+class AggregatedPipelineSource(BaseModel):
+    source_name: str
+    human_procedures: list[str] = Field(default_factory=list)
+
+
+class AggregatedPipeline(BaseModel):
+    scope_tasks: list[AggregatedPipelineTask] = Field(default_factory=list)
+    data_sources: list[AggregatedPipelineSource] = Field(default_factory=list)
+    output_products: list[str] = Field(default_factory=list)
