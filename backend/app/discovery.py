@@ -291,10 +291,14 @@ async def _post_grpc(
 ) -> dict[str, Any]:
     url = f"{config.DISCOVERY_BASE_URL.rstrip('/')}{path}"
     payload = json.dumps(body if body is not None else {})
+    headers = {
+        **_DISCOVERY_HEADERS,
+        "Authorization": f"Bearer {token}",
+    }
     response = await client.post(
         url,
         content=payload,
-        headers=_DISCOVERY_HEADERS,
+        headers=headers,
         cookies={"_cdswuserstoken": token},
     )
     response.raise_for_status()
@@ -391,6 +395,12 @@ async def fetch_platform_capabilities(user_token: Optional[str]) -> DiscoveryRes
             detail = body.get("reason") or body.get("error") or str(body)[:120]
         except Exception:
             detail = exc.response.text[:120]
+        if status == 502:
+            detail = (
+                f"{detail} — Agent Studio upstream unreachable at {config.DISCOVERY_BASE_URL}; "
+                "confirm the Studio application is running and DISCOVERY_BASE_URL matches "
+                "your active Studio URL"
+            )
         return _sandbox_response(
             f"platform_http_{status} via {token_source} ({detail})"
         )

@@ -87,7 +87,8 @@ export default function MetadataPopover({
     latestGroup.current = nextGroup;
     setSaveState("idle");
     setRejectError(null);
-  }, [target?.ownerId, target?.ownerType, initial]);
+    // Reload from server only when the selected owner changes — not after our own saves.
+  }, [target?.ownerId, target?.ownerType]);
 
   const persist = useCallback(
     async (payload: NodeTaskMetadata | GroupMetadataRecord) => {
@@ -141,10 +142,17 @@ export default function MetadataPopover({
     });
   };
 
-  const updateNodeForm = (updater: (prev: NodeTaskMetadata) => NodeTaskMetadata) => {
+  const updateNodeForm = (
+    updater: (prev: NodeTaskMetadata) => NodeTaskMetadata,
+    options?: { save?: boolean }
+  ) => {
     setNodeForm((prev) => {
       const next = updater(prev);
-      scheduleNodeSave(next);
+      if (options?.save !== false) {
+        scheduleNodeSave(next);
+      } else {
+        latestNode.current = next;
+      }
       return next;
     });
   };
@@ -163,10 +171,13 @@ export default function MetadataPopover({
   };
 
   const addSourceRow = () => {
-    updateNodeForm((prev) => ({
-      ...prev,
-      data_sources: [...prev.data_sources, { source_name: "", human_procedure: "" }],
-    }));
+    updateNodeForm(
+      (prev) => ({
+        ...prev,
+        data_sources: [...prev.data_sources, { source_name: "", human_procedure: "" }],
+      }),
+      { save: false }
+    );
   };
 
   const removeSourceRow = (index: number) => {
@@ -310,7 +321,7 @@ export default function MetadataPopover({
       ) : (
         <>
           <p className="metadata-popover__hint">
-            Map inbound data sources, historical human procedures, and the task output product.
+            List required data sources with associated actions and the output from this task.
             Changes save automatically.
           </p>
 
