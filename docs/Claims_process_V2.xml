@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://omg.org" xmlns:bpmndi="http://omg.org" xmlns:dc="http://omg.org" xmlns:di="http://omg.org" xmlns:xsi="http://w3.org" id="Definitions_AdvancedClaim" targetNamespace="http://bpmn.io" exporter="Camunda Modeler" exporterVersion="5.0.0">
+  
+  <!-- Collaboration specifying Pool and Lanes -->
+  <bpmn:collaboration id="Collaboration_01">
+    <bpmn:participant id="Participant_InsuranceCompany" name="Insurance Claims Department" processRef="ComplexInsuranceClaimProcess" />
+  </bpmn:collaboration>
+
+  <!-- Main Executable Process -->
+  <bpmn:process id="ComplexInsuranceClaimProcess" name="Advanced Insurance Claim Processing" isExecutable="true">
+    
+    <!-- Lanes definition for separation of concerns -->
+    <bpmn:laneSet id="LaneSet_01">
+      <bpmn:lane id="Lane_AutomatedSystems" name="Automated Systems">
+        <bpmn:flowNodeRef>StartEvent_ClaimReceived</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_RunFraudEngine</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_ForkAssessment</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_JoinAssessment</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_FraudAlert</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_ValueCheck</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>SubProcess_HighValueAudit</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_TriggerPayment</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>EndEvent_Paid</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>EndEvent_Rejected</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_ClaimsHandler" name="Claims Handler">
+        <bpmn:flowNodeRef>Task_AssessStandardClaim</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_InvestigateFraud</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>BoundaryEvent_SLA_Timer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_HighRiskConfirmed</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_MedicalExpert" name="Medical Expert">
+        <bpmn:flowNodeRef>Task_MedicalReview</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_EscalatedHandlerReview</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <!-- Flow Elements -->
+    <bpmn:startEvent id="StartEvent_ClaimReceived" name="Claim Received">
+      <bpmn:outgoing>Flow_01</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_RunFraudEngine" name="Execute Fraud Scoring Engine">
+      <bpmn:incoming>Flow_01</bpmn:incoming>
+      <bpmn:outgoing>Flow_02</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:exclusiveGateway id="Gateway_FraudAlert" name="High Risk detected?">
+      <bpmn:incoming>Flow_02</bpmn:incoming>
+      <bpmn:outgoing>Flow_FraudYes</bpmn:outgoing>
+      <bpmn:outgoing>Flow_FraudNo</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Fraud Track -->
+    <bpmn:userTask id="Task_InvestigateFraud" name="Investigate Fraud Alert">
+      <bpmn:incoming>Flow_FraudYes</bpmn:incoming>
+      <bpmn:outgoing>Flow_InvestigateToHighRisk</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="Gateway_HighRiskConfirmed" name="High Risk Confirmed">
+      <bpmn:incoming>Flow_InvestigateToHighRisk</bpmn:incoming>
+      <bpmn:outgoing>Flow_HighRiskNo</bpmn:outgoing>
+      <bpmn:outgoing>Flow_HighRiskYes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Parallel Processing Track (Standard) -->
+    <bpmn:parallelGateway id="Gateway_ForkAssessment">
+      <bpmn:incoming>Flow_FraudNo</bpmn:incoming>
+      <bpmn:incoming>Flow_HighRiskNo</bpmn:incoming>
+      <bpmn:outgoing>Flow_ToStandard</bpmn:outgoing>
+      <bpmn:outgoing>Flow_ToMedical</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:userTask id="Task_AssessStandardClaim" name="Assess Policy Coverage details">
+      <bpmn:incoming>Flow_ToStandard</bpmn:incoming>
+      <bpmn:outgoing>Flow_FromStandard</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- SLA Boundary Timer attached to Standard Assessment -->
+    <bpmn:boundaryEvent id="BoundaryEvent_SLA_Timer" name="48 Hour SLA" cancelActivity="true" attachedToRef="Task_AssessStandardClaim">
+      <bpmn:outgoing>Flow_SLA_Timeout</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerEventDefinition_01">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">PT48H</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+
+    <bpmn:userTask id="Task_EscalatedHandlerReview" name="Escalated Supervisor Review">
+      <bpmn:incoming>Flow_SLA_Timeout</bpmn:incoming>
+      <bpmn:outgoing>Flow_FromEscalation</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="Task_MedicalReview" name="Perform Expert Medical Review">
+      <bpmn:incoming>Flow_ToMedical</bpmn:incoming>
+      <bpmn:outgoing>Flow_FromMedical</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:parallelGateway id="Gateway_JoinAssessment">
+      <bpmn:incoming>Flow_FromStandard</bpmn:incoming>
+      <bpmn:incoming>Flow_FromEscalation</bpmn:incoming>
+      <bpmn:incoming>Flow_FromMedical</bpmn:incoming>
+      <bpmn:outgoing>Flow_ToValueCheck</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Value Segmentation Evaluation -->
+    <bpmn:exclusiveGateway id="Gateway_ValueCheck" name="Claim Amount Evaluation">
+      <bpmn:incoming>Flow_ToValueCheck</bpmn:incoming>
+      <bpmn:outgoing>Flow_LowValue</bpmn:outgoing>
+      <bpmn:outgoing>Flow_HighValue</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Embedded Subprocess for High-Value Claims Audit -->
+    <bpmn:subProcess id="SubProcess_HighValueAudit" name="High-Value Claims Audit Subprocess">
+      <bpmn:incoming>Flow_HighValue</bpmn:incoming>
+      <bpmn:outgoing>Flow_SubprocessComplete</bpmn:outgoing>
+      <bpmn:startEvent id="SubStart" name="Audit Initiated">
+        <bpmn:outgoing>SubFlow_1</bpmn:outgoing>
+      </bpmn:startEvent>
+      <bpmn:businessRuleTask id="SubTask_Recon" name="Reconcile Ledger Itemizations">
+        <bpmn:incoming>SubFlow_1</bpmn:incoming>
+        <bpmn:outgoing>SubFlow_2</bpmn:outgoing>
+      </bpmn:businessRuleTask>
+      <bpmn:userTask id="SubTask_ExecSignOff" name="Obtain Executive Sign-Off">
+        <bpmn:incoming>SubFlow_2</bpmn:incoming>
+        <bpmn:outgoing>SubFlow_3</bpmn:outgoing>
+      </bpmn:userTask>
+      <bpmn:endEvent id="SubEnd" name="Audit Complete">
+        <bpmn:incoming>SubFlow_3</bpmn:incoming>
+      </bpmn:endEvent>
+      <bpmn:sequenceFlow id="SubFlow_1" sourceRef="SubStart" targetRef="SubTask_Recon" />
+      <bpmn:sequenceFlow id="SubFlow_2" sourceRef="SubTask_Recon" targetRef="SubTask_ExecSignOff" />
+      <bpmn:sequenceFlow id="SubFlow_3" sourceRef="SubTask_ExecSignOff" targetRef="SubEnd" />
+    </bpmn:subProcess>
+
+    <!-- Gateway to merge processing branches before payout orchestration -->
+    <bpmn:exclusiveGateway id="Gateway_MergePayout">
+      <bpmn:incoming>Flow_LowValue</bpmn:incoming>
+      <bpmn:incoming>Flow_SubprocessComplete</bpmn:incoming>
+      <bpmn:outgoing>Flow_ToPayment</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="Task_TriggerPayment" name="Orchestrate ERP Payment Gateway">
+      <bpmn:incoming>Flow_ToPayment</bpmn:incoming>
+      <bpmn:outgoing>Flow_PaymentDone</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- End Events -->
+    <bpmn:endEvent id="EndEvent_Paid" name="Claim Disbursed Successfully">
+      <bpmn:incoming>Flow_PaymentDone</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="EndEvent_Rejected" name="Claim Terminated and Archived">
+      <bpmn:incoming>Flow_HighRiskYes</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows Construct -->
+    <bpmn:sequenceFlow id="Flow_01" sourceRef="StartEvent_ClaimReceived" targetRef="Task_RunFraudEngine" />
+    <bpmn:sequenceFlow id="Flow_02" sourceRef="Task_RunFraudEngine" targetRef="Gateway_FraudAlert" />
+    <bpmn:sequenceFlow id="Flow_FraudYes" name="Score &gt; 75" sourceRef="Gateway_FraudAlert" targetRef="Task_InvestigateFraud" />
+    <bpmn:sequenceFlow id="Flow_FraudNo" name="Score &lt;= 75" sourceRef="Gateway_FraudAlert" targetRef="Gateway_ForkAssessment" />
+    <bpmn:sequenceFlow id="Flow_ToStandard" sourceRef="Gateway_ForkAssessment" targetRef="Task_AssessStandardClaim" />
+    <bpmn:sequenceFlow id="Flow_ToMedical" sourceRef="Gateway_ForkAssessment" targetRef="Task_MedicalReview" />
+    <bpmn:sequenceFlow id="Flow_FromStandard" sourceRef="Task_AssessStandardClaim" targetRef="Gateway_JoinAssessment" />
+    <bpmn:sequenceFlow id="Flow_SLA_Timeout" sourceRef="BoundaryEvent_SLA_Timer" targetRef="Task_EscalatedHandlerReview" />
+    <bpmn:sequenceFlow id="Flow_FromEscalation" sourceRef="Task_EscalatedHandlerReview" targetRef="Gateway_JoinAssessment" />
+    <bpmn:sequenceFlow id="Flow_FromMedical" sourceRef="Task_MedicalReview" targetRef="Gateway_JoinAssessment" />
+    <bpmn:sequenceFlow id="Flow_ToValueCheck" sourceRef="Gateway_JoinAssessment" targetRef="Gateway_ValueCheck" />
+    <bpmn:sequenceFlow id="Flow_LowValue" name="Under $10,000" sourceRef="Gateway_ValueCheck" targetRef="Gateway_MergePayout" />
+    <bpmn:sequenceFlow id="Flow_HighValue" name="Over $10,000" sourceRef="Gateway_ValueCheck" targetRef="SubProcess_HighValueAudit" />
+    <bpmn:sequenceFlow id="Flow_SubprocessComplete" sourceRef="SubProcess_HighValueAudit" targetRef="Gateway_MergePayout" />
+    <bpmn:sequenceFlow id="Flow_ToPayment" sourceRef="Gateway_MergePayout" targetRef="Task_TriggerPayment" />
+    <bpmn:sequenceFlow id="Flow_PaymentDone" sourceRef="Task_TriggerPayment" targetRef="EndEvent_Paid" />
+    <bpmn:sequenceFlow id="Flow_InvestigateToHighRisk" sourceRef="Task_InvestigateFraud" targetRef="Gateway_HighRiskConfirmed" />
+    <bpmn:sequenceFlow id="Flow_HighRiskNo" name="no" sourceRef="Gateway_HighRiskConfirmed" targetRef="Gateway_ForkAssessment" />
+    <bpmn:sequenceFlow id="Flow_HighRiskYes" name="yes" sourceRef="Gateway_HighRiskConfirmed" targetRef="EndEvent_Rejected" />
+
+  </bpmn:process>
+</bpmn:definitions>
