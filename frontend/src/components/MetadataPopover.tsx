@@ -10,7 +10,6 @@ import {
   type NodeTaskMetadata,
 } from "../api";
 import AssistantGroupPopover from "./AssistantGroupPopover";
-import SourceNameTypeahead from "./SourceNameTypeahead";
 
 const DEBOUNCE_MS = 400;
 
@@ -200,10 +199,11 @@ export default function MetadataPopover({
                   <li key={index} className="metadata-source-row">
                     <label className="metadata-field">
                       <span>Data source</span>
-                      <SourceNameTypeahead
+                      <input
+                        type="text"
                         value={row.source_name}
-                        placeholder='e.g. "Fraud Engine Telemetry"'
-                        onChange={(next) => updateSourceRow(index, "source_name", next)}
+                        placeholder="e.g. legacy billing DB"
+                        onChange={(e) => updateSourceRow(index, "source_name", e.target.value)}
                       />
                     </label>
                     <label className="metadata-field">
@@ -211,7 +211,7 @@ export default function MetadataPopover({
                       <textarea
                         rows={3}
                         value={row.human_procedure}
-                        placeholder="Describe the steps performed on this data."
+                        placeholder="Describe the manual steps..."
                         onChange={(e) => updateSourceRow(index, "human_procedure", e.target.value)}
                       />
                     </label>

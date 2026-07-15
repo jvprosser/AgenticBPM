@@ -600,67 +600,6 @@ body {
   color: var(--muted);
 }
 
-.typeahead {
-  position: relative;
-}
-
-.typeahead input {
-  width: 100%;
-}
-
-.typeahead__status {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 0.72rem;
-  color: var(--muted);
-}
-
-.typeahead__list {
-  position: absolute;
-  z-index: 30;
-  left: 0;
-  right: 0;
-  margin: 0.25rem 0 0;
-  padding: 0.25rem 0;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #0f1720;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.typeahead__item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  width: 100%;
-  padding: 0.5rem 0.65rem;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.typeahead__item:hover {
-  background: rgba(59, 130, 246, 0.12);
-}
-
-.typeahead__item-name {
-  font-size: 0.84rem;
-  font-weight: 600;
-  color: #93c5fd;
-}
-
-.typeahead__item-meta {
-  font-size: 0.72rem;
-  color: var(--muted);
-  line-height: 1.35;
-}
-
 .group-overlay {
   border: 2px dashed #a855f7;
   border-radius: 12px;

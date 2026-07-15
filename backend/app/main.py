@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, source_suggest, suggest
+from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 from .schemas.metadata import GroupMetadata, NodeTaskMetadata
 
 config.ensure_dirs()
@@ -203,10 +203,6 @@ class MetadataUpsertRequest(BaseModel):
     metadata: dict
 
 
-class SuggestSourcesBody(BaseModel):
-    user_raw_input: str = ""
-
-
 def _resolve_user_token(
     _cdswuserstoken: Optional[str],
     authorization: Optional[str],
@@ -227,17 +223,6 @@ async def get_discovery(
     """Step 5b [Discovery Auth Passthrough]: platform capability matrix with sandbox fallback."""
     token = _resolve_user_token(_cdswuserstoken, authorization)
     return await discovery.fetch_platform_capabilities(token)
-
-
-@app.post("/api/discovery/suggest-sources", tags=["discovery"])
-async def suggest_sources(
-    body: SuggestSourcesBody,
-    _cdswuserstoken: Optional[str] = Cookie(None),
-    authorization: Optional[str] = Header(None),
-) -> list[dict]:
-    """Proxy Task Dialog typeahead intent to the Cloudera Data Broker agent."""
-    token = _resolve_user_token(_cdswuserstoken, authorization)
-    return await source_suggest.suggest_data_sources(body.user_raw_input, token)
 
 
 @app.post("/api/processes/{process_id}/suggest", tags=["agentic"])
