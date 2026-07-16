@@ -211,7 +211,7 @@ export default function MetadataPopover({
                       <textarea
                         rows={3}
                         value={row.human_procedure}
-                        placeholder="Describe the manual steps..."
+                        placeholder="Describe the steps you perform on this data."
                         onChange={(e) => updateSourceRow(index, "human_procedure", e.target.value)}
                       />
                     </label>
