@@ -1,13 +1,36 @@
-export interface UploadResult {
-  upload_id: string;
+export interface ProcessSummary {
+  id: string;
+  process_name: string;
   filename: string;
-  size_bytes: number;
-  stored_path: string;
-  received_at: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  leverage_multiplier: number;
+  node_count: number;
+}
+
+export interface ProcessListResponse {
+  processes: ProcessSummary[];
+}
+
+export interface ProcessPatchBody {
+  process_name?: string;
+  description?: string | null;
+}
+
+export interface UploadResult {
+  id: string;
+  upload_id?: string;
+  filename: string;
+  size_bytes?: number;
+  stored_path?: string | null;
+  received_at?: string;
   process_id: string;
-  process_name: string | null;
+  process_name: string;
   counts: { nodes: number; edges: number; lanes: number };
   layout_source: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface DataSourceProcedure {
@@ -145,7 +168,14 @@ export interface GraphLane {
 }
 
 export interface ProcessGraph {
-  process: { id: string; filename: string; format: string; created_at: string };
+  process: {
+    id: string;
+    process_name: string;
+    filename: string;
+    description?: string | null;
+    created_at: string;
+    updated_at: string;
+  };
   lanes: GraphLane[];
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -204,6 +234,25 @@ async function parseError(res: Response, fallback: string): Promise<string> {
 export async function getDiscovery(): Promise<DiscoveryResult> {
   const res = await fetch("/api/discovery", { credentials: "include" });
   if (!res.ok) throw new Error(await parseError(res, "Discovery failed"));
+  return res.json();
+}
+
+export async function listProcesses(): Promise<ProcessListResponse> {
+  const res = await fetch("/api/processes");
+  if (!res.ok) throw new Error(await parseError(res, "Failed to load process registry"));
+  return res.json();
+}
+
+export async function patchProcess(
+  processId: string,
+  body: ProcessPatchBody
+): Promise<ProcessSummary> {
+  const res = await fetch(`/api/processes/${processId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to update process"));
   return res.json();
 }
 

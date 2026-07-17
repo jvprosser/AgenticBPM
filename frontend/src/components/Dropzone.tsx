@@ -19,7 +19,7 @@ export default function Dropzone({ onIngested }: Props) {
       setError(null);
       try {
         const result = await uploadProcessFile(file);
-        onIngested(result.process_id);
+        onIngested(result.process_id ?? result.id);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
