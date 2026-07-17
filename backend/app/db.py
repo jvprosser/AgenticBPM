@@ -117,59 +117,101 @@ def touch_process_updated_at(conn: sqlite3.Connection, process_id: str) -> None:
     )
 
 
+def process_column_names(conn: sqlite3.Connection) -> set[str]:
+    return {row[1] for row in conn.execute("PRAGMA table_info(process)").fetchall()}
+
+
+def _compact_process_table(conn: sqlite3.Connection) -> None:
+    """Replace a legacy ``process`` row shape with the Process Registry columns."""
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS process_registry (
+            id              TEXT PRIMARY KEY,
+            process_name    TEXT NOT NULL,
+            filename        TEXT NOT NULL,
+            description     TEXT,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            raw_bpmn_xml    TEXT NOT NULL
+        );
+        DELETE FROM process_registry;
+        INSERT INTO process_registry (
+            id, process_name, filename, description, created_at, updated_at, raw_bpmn_xml
+        )
+        SELECT
+            id,
+            COALESCE(
+                NULLIF(TRIM(process_name), ''),
+                NULLIF(TRIM(filename), ''),
+                'Untitled Process'
+            ),
+            filename,
+            description,
+            COALESCE(created_at, CURRENT_TIMESTAMP),
+            COALESCE(updated_at, created_at, CURRENT_TIMESTAMP),
+            COALESCE(raw_bpmn_xml, raw_xml, '')
+        FROM process;
+        DROP TABLE process;
+        ALTER TABLE process_registry RENAME TO process;
+        """
+    )
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     node_cols = {row[1] for row in conn.execute("PRAGMA table_info(node)").fetchall()}
     if "metadata_json" not in node_cols:
         conn.execute("ALTER TABLE node ADD COLUMN metadata_json TEXT")
 
-    proc_cols = {row[1] for row in conn.execute("PRAGMA table_info(process)").fetchall()}
+    proc_cols = process_column_names(conn)
     if not proc_cols:
         return
 
-    if "raw_bpmn_xml" in proc_cols:
-        return
-
-    # Legacy schema: add Process Registry columns in-place (preserves FK refs).
     conn.execute("DROP TABLE IF EXISTS process_new")
 
-    if "process_name" not in proc_cols:
-        conn.execute("ALTER TABLE process ADD COLUMN process_name TEXT")
-    if "description" not in proc_cols:
-        conn.execute("ALTER TABLE process ADD COLUMN description TEXT")
-    if "updated_at" not in proc_cols:
-        conn.execute("ALTER TABLE process ADD COLUMN updated_at TIMESTAMP")
     if "raw_bpmn_xml" not in proc_cols:
+        if "process_name" not in proc_cols:
+            conn.execute("ALTER TABLE process ADD COLUMN process_name TEXT")
+        if "description" not in proc_cols:
+            conn.execute("ALTER TABLE process ADD COLUMN description TEXT")
+        if "updated_at" not in proc_cols:
+            conn.execute("ALTER TABLE process ADD COLUMN updated_at TIMESTAMP")
         conn.execute("ALTER TABLE process ADD COLUMN raw_bpmn_xml TEXT")
 
-    if "raw_xml" in proc_cols:
+        if "raw_xml" in proc_cols:
+            conn.execute(
+                "UPDATE process SET raw_bpmn_xml = COALESCE(raw_bpmn_xml, raw_xml) "
+                "WHERE raw_bpmn_xml IS NULL"
+            )
         conn.execute(
-            "UPDATE process SET raw_bpmn_xml = COALESCE(raw_bpmn_xml, raw_xml) "
+            "UPDATE process SET raw_bpmn_xml = COALESCE(raw_bpmn_xml, '') "
             "WHERE raw_bpmn_xml IS NULL"
         )
-    conn.execute(
-        "UPDATE process SET raw_bpmn_xml = COALESCE(raw_bpmn_xml, '') "
-        "WHERE raw_bpmn_xml IS NULL"
-    )
-    conn.execute(
-        "UPDATE process SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
-        "WHERE updated_at IS NULL"
-    )
-    conn.execute(
-        "UPDATE process SET process_name = COALESCE("
-        "NULLIF(TRIM(process_name), ''), NULLIF(TRIM(filename), ''), 'Untitled Process'"
-        ") WHERE process_name IS NULL OR TRIM(process_name) = ''"
-    )
-
-    from . import parser
-
-    for row in conn.execute(
-        "SELECT id, filename, raw_bpmn_xml FROM process"
-    ).fetchall():
-        name = parser.extract_process_name(row["raw_bpmn_xml"] or "", row["filename"])
         conn.execute(
-            "UPDATE process SET process_name = ? WHERE id = ?",
-            (name, row["id"]),
+            "UPDATE process SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
+            "WHERE updated_at IS NULL"
         )
+        conn.execute(
+            "UPDATE process SET process_name = COALESCE("
+            "NULLIF(TRIM(process_name), ''), NULLIF(TRIM(filename), ''), 'Untitled Process'"
+            ") WHERE process_name IS NULL OR TRIM(process_name) = ''"
+        )
+
+        from . import parser
+
+        for row in conn.execute(
+            "SELECT id, filename, raw_bpmn_xml FROM process"
+        ).fetchall():
+            name = parser.extract_process_name(row["raw_bpmn_xml"] or "", row["filename"])
+            conn.execute(
+                "UPDATE process SET process_name = ? WHERE id = ?",
+                (name, row["id"]),
+            )
+
+    proc_cols = process_column_names(conn)
+    if "raw_xml" in proc_cols or "format" in proc_cols:
+        _compact_process_table(conn)
 
 
 @contextmanager

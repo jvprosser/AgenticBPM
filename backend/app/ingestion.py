@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from . import db, parser
@@ -19,6 +20,33 @@ from .metadata import get_metadata
 
 def _qualify(process_id: str, ref: str) -> str:
     return f"{process_id}:{ref}"
+
+
+def _insert_process_row(
+    conn: sqlite3.Connection,
+    process_id: str,
+    process_name: str,
+    filename: str,
+    xml_text: str,
+) -> None:
+    """Insert a process row, compatible with legacy columns until migration compacts."""
+    cols = db.process_column_names(conn)
+    fields = ["id", "process_name", "filename", "description", "raw_bpmn_xml"]
+    values: list[object] = [process_id, process_name, filename, None, xml_text]
+    if "raw_xml" in cols:
+        fields.append("raw_xml")
+        values.append(xml_text)
+    if "format" in cols:
+        fields.append("format")
+        values.append("bpmn")
+    if "created_at" in cols and "raw_xml" in cols:
+        fields.append("created_at")
+        values.append(datetime.now(timezone.utc).isoformat())
+    placeholders = ", ".join("?" * len(fields))
+    conn.execute(
+        f"INSERT INTO process ({', '.join(fields)}) VALUES ({placeholders})",
+        values,
+    )
 
 
 def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
@@ -33,12 +61,7 @@ def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
 
     process_id = uuid.uuid4().hex
 
-    conn.execute(
-        "INSERT INTO process "
-        "(id, process_name, filename, description, raw_bpmn_xml) "
-        "VALUES (?, ?, ?, NULL, ?)",
-        (process_id, process_name, filename, xml_text),
-    )
+    _insert_process_row(conn, process_id, process_name, filename, xml_text)
 
     conn.executemany(
         'INSERT INTO lane (id, process_id, source_ref, label) VALUES (?, ?, ?, ?)',
