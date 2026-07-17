@@ -36,6 +36,8 @@ export interface UploadResult {
 export interface DataSourceProcedure {
   source_name: string;
   human_procedure: string;
+  data_destinations: string;
+  is_intermediate: boolean;
 }
 
 export interface NodeTaskMetadata {

@@ -44,6 +44,8 @@ function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): 
       data_sources: initial.data_sources.map((row) => ({
         source_name: row.source_name ?? "",
         human_procedure: row.human_procedure ?? "",
+        data_destinations: row.data_destinations ?? "",
+        is_intermediate: row.is_intermediate ?? false,
       })),
       output_end_product: initial.output_end_product ?? "",
     };
@@ -119,7 +121,7 @@ export default function MetadataPopover({
   const updateSourceRow = (
     index: number,
     key: keyof DataSourceProcedure,
-    value: string
+    value: string | boolean
   ) => {
     updateNodeForm((prev) => ({
       ...prev,
@@ -133,7 +135,15 @@ export default function MetadataPopover({
     updateNodeForm(
       (prev) => ({
         ...prev,
-        data_sources: [...prev.data_sources, { source_name: "", human_procedure: "" }],
+        data_sources: [
+          ...prev.data_sources,
+          {
+            source_name: "",
+            human_procedure: "",
+            data_destinations: "",
+            is_intermediate: false,
+          },
+        ],
       }),
       { save: false }
     );
@@ -160,7 +170,7 @@ export default function MetadataPopover({
 
   return (
     <aside
-      className="metadata-popover"
+      className={`metadata-popover${isGroupPanel ? "" : " metadata-popover--wide"}`}
       role="dialog"
       aria-label={isGroupPanel ? "Assistant group consolidation" : "Task data mechanics"}
     >
@@ -197,24 +207,55 @@ export default function MetadataPopover({
               <ul className="metadata-source-list">
                 {nodeForm.data_sources.map((row, index) => (
                   <li key={index} className="metadata-source-row">
-                    <label className="metadata-field">
-                      <span>Data source</span>
-                      <input
-                        type="text"
-                        value={row.source_name}
-                        placeholder="e.g. legacy billing DB"
-                        onChange={(e) => updateSourceRow(index, "source_name", e.target.value)}
-                      />
-                    </label>
-                    <label className="metadata-field">
-                      <span>Corresponding process</span>
-                      <textarea
-                        rows={3}
-                        value={row.human_procedure}
-                        placeholder="Describe the steps you perform on this data."
-                        onChange={(e) => updateSourceRow(index, "human_procedure", e.target.value)}
-                      />
-                    </label>
+                    <div className="metadata-source-row__grid">
+                      <div className="metadata-source-row__col-left">
+                        <label className="metadata-field">
+                          <span>Data source</span>
+                          <input
+                            type="text"
+                            value={row.source_name}
+                            placeholder="e.g. legacy billing DB"
+                            onChange={(e) =>
+                              updateSourceRow(index, "source_name", e.target.value)
+                            }
+                          />
+                        </label>
+                        <label className="metadata-field">
+                          <span>Data destinations</span>
+                          <input
+                            type="text"
+                            value={row.data_destinations}
+                            placeholder="e.g., Claims Core Database"
+                            onChange={(e) =>
+                              updateSourceRow(index, "data_destinations", e.target.value)
+                            }
+                          />
+                        </label>
+                        <label className="metadata-field metadata-field--checkbox">
+                          <input
+                            type="checkbox"
+                            checked={row.is_intermediate}
+                            onChange={(e) =>
+                              updateSourceRow(index, "is_intermediate", e.target.checked)
+                            }
+                          />
+                          <span>Intermediate:</span>
+                        </label>
+                      </div>
+                      <div className="metadata-source-row__col-right">
+                        <label className="metadata-field metadata-field--stretch">
+                          <span>Corresponding process</span>
+                          <textarea
+                            rows={6}
+                            value={row.human_procedure}
+                            placeholder="Describe the steps you perform on this data."
+                            onChange={(e) =>
+                              updateSourceRow(index, "human_procedure", e.target.value)
+                            }
+                          />
+                        </label>
+                      </div>
+                    </div>
                     <button
                       type="button"
                       className="btn btn--sm btn--row-remove"

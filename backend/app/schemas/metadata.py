@@ -10,13 +10,22 @@ from pydantic import BaseModel, Field, field_validator
 class DataSourceProcedure(BaseModel):
     source_name: str = ""
     human_procedure: str = ""
+    data_destinations: Optional[str] = ""
+    is_intermediate: Optional[bool] = False
 
-    @field_validator("source_name", "human_procedure", mode="before")
+    @field_validator("source_name", "human_procedure", "data_destinations", mode="before")
     @classmethod
     def coerce_text(cls, value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip()
+
+    @field_validator("is_intermediate", mode="before")
+    @classmethod
+    def coerce_intermediate(cls, value: Any) -> bool:
+        if value is None:
+            return False
+        return bool(value)
 
 
 class NodeTaskMetadata(BaseModel):
@@ -39,7 +48,11 @@ class NodeTaskMetadata(BaseModel):
                 if not isinstance(item, dict):
                     continue
                 entry = DataSourceProcedure.model_validate(item)
-                if entry.source_name or entry.human_procedure:
+                if (
+                    entry.source_name
+                    or entry.human_procedure
+                    or entry.data_destinations
+                ):
                     sources.append(entry)
         return cls(
             data_sources=sources,
