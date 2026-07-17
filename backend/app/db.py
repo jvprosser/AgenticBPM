@@ -17,11 +17,13 @@ from . import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS process (
-    id          TEXT PRIMARY KEY,
-    filename    TEXT NOT NULL,
-    format      TEXT NOT NULL DEFAULT 'bpmn',
-    raw_xml     TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    id              TEXT PRIMARY KEY,
+    process_name    TEXT NOT NULL,
+    filename        TEXT NOT NULL,
+    description     TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    raw_bpmn_xml    TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS lane (
@@ -107,10 +109,63 @@ def init_db() -> None:
         _migrate_schema(conn)
 
 
+def touch_process_updated_at(conn: sqlite3.Connection, process_id: str) -> None:
+    """Bump ``updated_at`` whenever canvas or metadata state is persisted."""
+    conn.execute(
+        "UPDATE process SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (process_id,),
+    )
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     node_cols = {row[1] for row in conn.execute("PRAGMA table_info(node)").fetchall()}
     if "metadata_json" not in node_cols:
         conn.execute("ALTER TABLE node ADD COLUMN metadata_json TEXT")
+
+    proc_cols = {row[1] for row in conn.execute("PRAGMA table_info(process)").fetchall()}
+    if not proc_cols:
+        return
+
+    if "raw_bpmn_xml" in proc_cols:
+        return
+
+    # Legacy schema: raw_xml + format → Process Registry columns.
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS process_new (
+            id              TEXT PRIMARY KEY,
+            process_name    TEXT NOT NULL,
+            filename        TEXT NOT NULL,
+            description     TEXT,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            raw_bpmn_xml    TEXT NOT NULL
+        );
+        INSERT INTO process_new (id, process_name, filename, description, created_at, updated_at, raw_bpmn_xml)
+        SELECT
+            id,
+            COALESCE(
+                NULLIF(TRIM(filename), ''),
+                'Untitled Process'
+            ),
+            filename,
+            NULL,
+            COALESCE(created_at, CURRENT_TIMESTAMP),
+            COALESCE(created_at, CURRENT_TIMESTAMP),
+            COALESCE(raw_xml, '')
+        FROM process;
+        DROP TABLE process;
+        ALTER TABLE process_new RENAME TO process;
+        """
+    )
+    from . import parser
+
+    for row in conn.execute("SELECT id, filename, raw_bpmn_xml FROM process").fetchall():
+        name = parser.extract_process_name(row["raw_bpmn_xml"], row["filename"])
+        conn.execute(
+            "UPDATE process SET process_name = ? WHERE id = ?",
+            (name, row["id"]),
+        )
 
 
 @contextmanager

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from typing import Optional
 
-from . import parser
+from . import db, parser
 from .groups import list_groups
 from .layout import apply_cascade_layout
 from .metadata import get_metadata
@@ -24,6 +24,7 @@ def _qualify(process_id: str, ref: str) -> str:
 def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
     """Parse + persist a BPMN document. Returns an ingestion summary."""
     parsed = parser.parse_bpmn(xml_text)
+    process_name = parser.extract_process_name(xml_text, filename)
 
     layout_source = "diagram-interchange"
     if not parsed.has_di:
@@ -31,12 +32,12 @@ def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
         layout_source = "cascade-fallback"
 
     process_id = uuid.uuid4().hex
-    created_at = datetime.now(timezone.utc).isoformat()
 
     conn.execute(
-        "INSERT INTO process (id, filename, format, raw_xml, created_at) "
-        "VALUES (?, ?, 'bpmn', ?, ?)",
-        (process_id, filename, xml_text, created_at),
+        "INSERT INTO process "
+        "(id, process_name, filename, description, raw_bpmn_xml) "
+        "VALUES (?, ?, ?, NULL, ?)",
+        (process_id, process_name, filename, xml_text),
     )
 
     conn.executemany(
@@ -83,9 +84,15 @@ def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
         ],
     )
 
+    row = conn.execute(
+        "SELECT created_at, updated_at FROM process WHERE id = ?",
+        (process_id,),
+    ).fetchone()
+
     return {
+        "id": process_id,
         "process_id": process_id,
-        "process_name": parsed.process_name,
+        "process_name": process_name,
         "filename": filename,
         "counts": {
             "nodes": len(parsed.nodes),
@@ -93,14 +100,16 @@ def ingest_bpmn(conn: sqlite3.Connection, filename: str, xml_text: str) -> dict:
             "lanes": len(parsed.lanes),
         },
         "layout_source": layout_source,
-        "created_at": created_at,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
     }
 
 
 def get_graph(conn: sqlite3.Connection, process_id: str) -> dict | None:
     """Return the full graph for the React canvas, or None if unknown."""
     proc = conn.execute(
-        "SELECT id, filename, format, created_at FROM process WHERE id = ?",
+        "SELECT id, process_name, filename, description, created_at, updated_at "
+        "FROM process WHERE id = ?",
         (process_id,),
     ).fetchone()
     if proc is None:
@@ -149,13 +158,65 @@ def update_node_position(
         "UPDATE node SET x = ?, y = ? WHERE id = ? AND process_id = ?",
         (x, y, node_id, process_id),
     )
-    return cur.rowcount > 0
+    if cur.rowcount > 0:
+        db.touch_process_updated_at(conn, process_id)
+        return True
+    return False
+
+
+def update_process_fields(
+    conn: sqlite3.Connection,
+    process_id: str,
+    *,
+    process_name: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict | None:
+    """Patch registry fields on a saved process. Returns the updated row or None."""
+    proc = conn.execute(
+        "SELECT id FROM process WHERE id = ?", (process_id,)
+    ).fetchone()
+    if proc is None:
+        return None
+
+    sets: list[str] = []
+    params: list[object] = []
+    if process_name is not None:
+        name = process_name.strip()
+        if not name:
+            raise ValueError("process_name cannot be empty.")
+        sets.append("process_name = ?")
+        params.append(name)
+    if description is not None:
+        sets.append("description = ?")
+        params.append(description.strip() if description else None)
+
+    if not sets:
+        row = conn.execute(
+            "SELECT id, process_name, filename, description, created_at, updated_at "
+            "FROM process WHERE id = ?",
+            (process_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    sets.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(process_id)
+    conn.execute(
+        f"UPDATE process SET {', '.join(sets)} WHERE id = ?",
+        params,
+    )
+    row = conn.execute(
+        "SELECT id, process_name, filename, description, created_at, updated_at "
+        "FROM process WHERE id = ?",
+        (process_id,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def list_processes(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT p.id, p.filename, p.created_at, "
+        "SELECT p.id, p.process_name, p.filename, p.description, "
+        "p.created_at, p.updated_at, "
         "  (SELECT COUNT(*) FROM node n WHERE n.process_id = p.id) AS node_count "
-        "FROM process p ORDER BY p.created_at DESC"
+        "FROM process p ORDER BY p.updated_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]

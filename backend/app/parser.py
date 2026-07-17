@@ -82,6 +82,40 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
+def _filename_stem(filename: str) -> str:
+    """Return filename without extension, or a safe default."""
+    base = (filename or "").strip()
+    if not base:
+        return "Untitled Process"
+    if "." in base:
+        return base.rsplit(".", 1)[0].strip() or "Untitled Process"
+    return base
+
+
+def extract_process_name(raw_xml: str, filename: str) -> str:
+    """Extract the BPMN ``process`` element ``name`` attribute, namespace-agnostic.
+
+    Falls back to the sanitized upload filename when ``name`` is missing or blank.
+    """
+    fallback = _filename_stem(filename)
+    if not raw_xml or not raw_xml.strip():
+        return fallback
+    try:
+        root = ET.fromstring(raw_xml)
+    except ET.ParseError:
+        return fallback
+
+    for el in root.iter():
+        if _local(el.tag) != "process":
+            continue
+        name = (el.attrib.get("name") or "").strip()
+        if name:
+            return name
+        break
+
+    return fallback
+
+
 def _extract_di_coords(root: ET.Element) -> dict[str, tuple[float, float]]:
     coords: dict[str, tuple[float, float]] = {}
     for el in root.iter():

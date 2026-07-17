@@ -6,16 +6,14 @@ when a built frontend is present, the static React app on the same origin.
 
 from __future__ import annotations
 
-import uuid
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import Cookie, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 from .schemas.metadata import GroupMetadata, NodeTaskMetadata
@@ -45,14 +43,28 @@ def health() -> dict:
     return {"status": "ok", "service": "process-mapper", "version": app.version}
 
 
-@app.post("/api/upload", tags=["ingestion"])
-async def upload_process(file: UploadFile = File(...)) -> dict:
-    """Steps 1-2 [Upload + Ingestion]: accept a BPMN file, store it verbatim, then
-    parse it into a graph (nodes/edges/lanes) and persist to SQLite.
+class ProcessSummary(BaseModel):
+    id: str
+    process_name: str
+    filename: str
+    description: Optional[str] = None
+    created_at: str
+    updated_at: str
+    leverage_multiplier: float
+    node_count: int
 
-    The raw XML is kept on disk *and* in the ``process`` row for provenance. Layout
-    comes from Diagram Interchange when present, otherwise the cascade fallback.
-    """
+
+class ProcessListResponse(BaseModel):
+    processes: list[ProcessSummary]
+
+
+class ProcessPatchRequest(BaseModel):
+    process_name: Optional[str] = None
+    description: Optional[str] = None
+
+
+async def _ingest_upload(file: UploadFile) -> dict:
+    """Shared BPMN upload handler for registry ingest routes."""
     filename = file.filename or "upload.xml"
     suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if suffix not in config.ALLOWED_SUFFIXES:
@@ -70,10 +82,6 @@ async def upload_process(file: UploadFile = File(...)) -> dict:
             detail=f"File exceeds max size of {config.MAX_UPLOAD_BYTES} bytes.",
         )
 
-    upload_id = uuid.uuid4().hex
-    stored_path = config.UPLOAD_DIR / f"{upload_id}_{filename}"
-    stored_path.write_bytes(contents)
-
     try:
         xml_text = contents.decode("utf-8")
     except UnicodeDecodeError:
@@ -85,25 +93,26 @@ async def upload_process(file: UploadFile = File(...)) -> dict:
     except ET.ParseError as exc:
         raise HTTPException(status_code=422, detail=f"Malformed XML: {exc}") from exc
 
+    summary["size_bytes"] = len(contents)
+    return summary
+
+
+@app.post("/api/processes", tags=["ingestion"])
+async def create_process(file: UploadFile = File(...)) -> dict:
+    """Ingest a BPMN file into the Process Registry and return the new process id."""
+    return await _ingest_upload(file)
+
+
+@app.post("/api/upload", tags=["ingestion"])
+async def upload_process(file: UploadFile = File(...)) -> dict:
+    """Legacy upload route — delegates to ``POST /api/processes``."""
+    summary = await _ingest_upload(file)
     return {
-        "upload_id": upload_id,
-        "size_bytes": len(contents),
-        "stored_path": str(stored_path.relative_to(config.REPO_ROOT)),
-        "received_at": datetime.now(timezone.utc).isoformat(),
         **summary,
+        "upload_id": summary["id"],
+        "stored_path": None,
+        "received_at": summary.get("created_at"),
     }
-
-
-class ProcessSummary(BaseModel):
-    id: str
-    filename: str
-    created_at: str
-    leverage_multiplier: float
-    node_count: int
-
-
-class ProcessListResponse(BaseModel):
-    processes: list[ProcessSummary]
 
 
 @app.get("/api/processes", tags=["ingestion"], response_model=ProcessListResponse)
@@ -124,12 +133,32 @@ def list_processes() -> ProcessListResponse:
 
 @app.get("/api/processes/{process_id}", tags=["ingestion"])
 def get_process_graph(process_id: str) -> dict:
-    """Return the persisted graph (nodes with X/Y, edges, lanes) for the canvas."""
+    """Restore a saved process: full graph (nodes, edges, lanes, groups) for the canvas."""
     with db.get_conn() as conn:
         graph = ingestion.get_graph(conn, process_id)
     if graph is None:
         raise HTTPException(status_code=404, detail="Process not found.")
     return graph
+
+
+@app.patch("/api/processes/{process_id}", tags=["ingestion"])
+def patch_process(process_id: str, body: ProcessPatchRequest) -> dict:
+    """Update registry metadata such as ``process_name`` or ``description``."""
+    if body.process_name is None and body.description is None:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+    try:
+        with db.get_conn() as conn:
+            updated = ingestion.update_process_fields(
+                conn,
+                process_id,
+                process_name=body.process_name,
+                description=body.description,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Process not found.")
+    return updated
 
 
 class NodePosition(BaseModel):
@@ -168,7 +197,9 @@ def create_strategic_override(process_id: str, body: StrategicOverrideRequest) -
     """Record a strategic boundary override and purge matching proposed agentic groups."""
     try:
         with db.get_conn() as conn:
-            return overrides.record_override(conn, process_id, body.node_ids)
+            result = overrides.record_override(conn, process_id, body.node_ids)
+            db.touch_process_updated_at(conn, process_id)
+            return result
     except ValueError as exc:
         msg = str(exc)
         status = 404 if "not found" in msg.lower() else 400
@@ -183,7 +214,9 @@ def create_group(process_id: str, body: CreateGroupRequest) -> dict:
         with db.get_conn() as conn:
             if ingestion.get_graph(conn, process_id) is None:
                 raise HTTPException(status_code=404, detail="Process not found.")
-            return groups.create_group(conn, process_id, body.node_ids, bbox)
+            result = groups.create_group(conn, process_id, body.node_ids, bbox)
+            db.touch_process_updated_at(conn, process_id)
+            return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -192,6 +225,8 @@ def create_group(process_id: str, body: CreateGroupRequest) -> dict:
 def delete_group(process_id: str, group_id: str) -> dict:
     with db.get_conn() as conn:
         ok = groups.delete_group(conn, process_id, group_id)
+        if ok:
+            db.touch_process_updated_at(conn, process_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Group not found.")
     return {"deleted": group_id}
@@ -262,6 +297,7 @@ def upsert_metadata(process_id: str, body: MetadataUpsertRequest) -> dict:
                 body.owner_id,
                 payload,
             )
+            db.touch_process_updated_at(conn, process_id)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except ValueError as exc:
