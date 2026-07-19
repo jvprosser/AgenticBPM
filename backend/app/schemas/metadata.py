@@ -30,12 +30,12 @@ class DataSourceProcedure(BaseModel):
 
 class NodeTaskMetadata(BaseModel):
     data_sources: list[DataSourceProcedure] = Field(default_factory=list)
-    output_end_product: str = ""
-    final_activity: str = ""
+    output_end_product: Optional[str] = ""
+    final_activity: Optional[str] = ""
 
     @field_validator("output_end_product", "final_activity", mode="before")
     @classmethod
-    def coerce_output(cls, value: Any) -> str:
+    def coerce_text_fields(cls, value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip()
