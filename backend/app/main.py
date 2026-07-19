@@ -309,6 +309,34 @@ def upsert_metadata(process_id: str, body: MetadataUpsertRequest) -> dict:
     }
 
 
+@app.post("/api/processes/{process_id}/nodes/{node_id}/delegate-to-ai", tags=["metadata"])
+def delegate_node_to_ai(process_id: str, node_id: str, body: dict) -> dict:
+    """Persist the node's task breakdown and accept it for AI delegation."""
+    try:
+        validated = NodeTaskMetadata.from_payload(body)
+        payload = validated.model_dump()
+        with db.get_conn() as conn:
+            if ingestion.get_graph(conn, process_id) is None:
+                raise HTTPException(status_code=404, detail="Process not found.")
+            saved = metadata_svc.upsert_metadata(
+                conn,
+                process_id,
+                "node",
+                node_id,
+                payload,
+            )
+            db.touch_process_updated_at(conn, process_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "delegated",
+        "node_id": node_id,
+        "metadata": saved,
+    }
+
+
 # --- Static frontend (served only when a build exists) -----------------------
 # Mounted last so it never shadows the API routes above.
 if config.FRONTEND_DIST.is_dir():

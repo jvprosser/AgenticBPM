@@ -31,8 +31,9 @@ class DataSourceProcedure(BaseModel):
 class NodeTaskMetadata(BaseModel):
     data_sources: list[DataSourceProcedure] = Field(default_factory=list)
     output_end_product: str = ""
+    final_activity: str = ""
 
-    @field_validator("output_end_product", mode="before")
+    @field_validator("output_end_product", "final_activity", mode="before")
     @classmethod
     def coerce_output(cls, value: Any) -> str:
         if value is None:
@@ -57,6 +58,7 @@ class NodeTaskMetadata(BaseModel):
         return cls(
             data_sources=sources,
             output_end_product=data.get("output_end_product"),
+            final_activity=data.get("final_activity"),
         )
 
 

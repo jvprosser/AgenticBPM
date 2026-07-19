@@ -12,6 +12,7 @@ import {
 import AssistantGroupPopover from "./AssistantGroupPopover";
 
 const DEBOUNCE_MS = 400;
+const TASK_EDITOR_WIDTH_PX = 600;
 
 export interface MetadataTarget {
   ownerType: "node" | "group";
@@ -38,6 +39,18 @@ interface Props {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+async function readResponseError(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body?.detail) {
+      return typeof body.detail === "string" ? body.detail : fallback;
+    }
+  } catch {
+    /* non-JSON error body */
+  }
+  return `${fallback} (${res.status})`;
+}
+
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
   if (isNodeTaskMetadata(initial)) {
     return {
@@ -48,6 +61,7 @@ function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): 
         is_intermediate: row.is_intermediate ?? false,
       })),
       output_end_product: initial.output_end_product ?? "",
+      final_activity: initial.final_activity ?? "",
     };
   }
   return { ...EMPTY_NODE_TASK_METADATA };
@@ -63,6 +77,8 @@ export default function MetadataPopover({
 }: Props) {
   const [nodeForm, setNodeForm] = useState<NodeTaskMetadata>(normalizeNodeInitial(initial));
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [delegateBusy, setDelegateBusy] = useState(false);
+  const [delegateError, setDelegateError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNode = useRef(nodeForm);
 
@@ -71,6 +87,7 @@ export default function MetadataPopover({
     setNodeForm(nextNode);
     latestNode.current = nextNode;
     setSaveState("idle");
+    setDelegateError(null);
   }, [target?.ownerId, target?.ownerType]);
 
   const persist = useCallback(
@@ -156,6 +173,42 @@ export default function MetadataPopover({
     }));
   };
 
+  const handleDelegateToAI = async () => {
+    if (!target || target.ownerType !== "node") return;
+    setDelegateBusy(true);
+    setDelegateError(null);
+    try {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+      }
+      await persist(latestNode.current);
+      const res = await fetch(
+        `/api/processes/${processId}/nodes/${encodeURIComponent(target.ownerId)}/delegate-to-ai`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(latestNode.current),
+        }
+      );
+      if (!res.ok) {
+        throw new Error(await readResponseError(res, "Delegation failed"));
+      }
+      const body = (await res.json()) as { metadata?: NodeTaskMetadata };
+      if (body.metadata) {
+        const next = normalizeNodeInitial(body.metadata);
+        setNodeForm(next);
+        latestNode.current = next;
+        onSaved(target.ownerType, target.ownerId, body.metadata);
+      }
+    } catch (e) {
+      setDelegateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDelegateBusy(false);
+    }
+  };
+
   if (!target) return null;
 
   const isGroupPanel = target.ownerType === "group";
@@ -171,6 +224,7 @@ export default function MetadataPopover({
   return (
     <aside
       className={`metadata-popover${isGroupPanel ? "" : " metadata-popover--wide"}`}
+      style={isGroupPanel ? undefined : { width: TASK_EDITOR_WIDTH_PX }}
       role="dialog"
       aria-label={isGroupPanel ? "Assistant group consolidation" : "Task data mechanics"}
     >
@@ -193,8 +247,8 @@ export default function MetadataPopover({
             </button>
           </div>
           <p className="metadata-popover__hint">
-            List required data sources with associated actions and the output from this task.
-            Changes save automatically.
+            Break down inbound data sources, human verification routines, and outputs. Changes
+            save automatically.
           </p>
 
           <section className="metadata-section">
@@ -210,7 +264,7 @@ export default function MetadataPopover({
                     <div className="metadata-source-row__grid">
                       <div className="metadata-source-row__col-left">
                         <label className="metadata-field">
-                          <span>Data source</span>
+                          <span>Source Name</span>
                           <input
                             type="text"
                             value={row.source_name}
@@ -221,7 +275,7 @@ export default function MetadataPopover({
                           />
                         </label>
                         <label className="metadata-field">
-                          <span>Data destinations</span>
+                          <span>Data Destinations</span>
                           <input
                             type="text"
                             value={row.data_destinations}
@@ -244,7 +298,7 @@ export default function MetadataPopover({
                       </div>
                       <div className="metadata-source-row__col-right">
                         <label className="metadata-field metadata-field--stretch">
-                          <span>Corresponding process</span>
+                          <span>Human Procedure</span>
                           <textarea
                             rows={6}
                             value={row.human_procedure}
@@ -273,9 +327,23 @@ export default function MetadataPopover({
           </section>
 
           <section className="metadata-section">
-            <h4 className="metadata-section__title">Output End Product (Outputs)</h4>
+            <h4 className="metadata-section__title">Execution &amp; Outputs</h4>
             <label className="metadata-field">
-              <span>Finalized artifact or routing asset</span>
+              <span>Final Activity (Human Verification Routine):</span>
+              <textarea
+                rows={3}
+                value={nodeForm.final_activity}
+                placeholder="Describe the human verification steps performed before handoff."
+                onChange={(e) =>
+                  updateNodeForm((prev) => ({
+                    ...prev,
+                    final_activity: e.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="metadata-field">
+              <span>Finalized Artifact</span>
               <input
                 type="text"
                 value={nodeForm.output_end_product}
@@ -288,6 +356,19 @@ export default function MetadataPopover({
                 }
               />
             </label>
+            <button
+              type="button"
+              className="btn btn--agentic metadata-delegate-btn"
+              disabled={delegateBusy}
+              onClick={() => void handleDelegateToAI()}
+            >
+              {delegateBusy ? "Delegating…" : "Delegate to AI"}
+            </button>
+            {delegateError && (
+              <p className="metadata-popover__status metadata-popover__status--error">
+                {delegateError}
+              </p>
+            )}
           </section>
 
           <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>

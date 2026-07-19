@@ -43,6 +43,7 @@ export interface DataSourceProcedure {
 export interface NodeTaskMetadata {
   data_sources: DataSourceProcedure[];
   output_end_product: string;
+  final_activity: string;
 }
 
 export interface GroupMetadataRecord {
@@ -54,6 +55,7 @@ export interface GroupMetadataRecord {
 export const EMPTY_NODE_TASK_METADATA: NodeTaskMetadata = {
   data_sources: [],
   output_end_product: "",
+  final_activity: "",
 };
 
 export const EMPTY_GROUP_METADATA: GroupMetadataRecord = {
