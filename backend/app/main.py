@@ -11,11 +11,11 @@ from typing import Literal, Optional
 
 from fastapi import Cookie, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from . import config, db, analytics, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
+from . import config, db, analytics, delegate_planning, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 from .schemas.metadata import GroupMetadata, NodeTaskMetadata
 
 config.ensure_dirs()
@@ -309,32 +309,19 @@ def upsert_metadata(process_id: str, body: MetadataUpsertRequest) -> dict:
     }
 
 
-@app.post("/api/processes/{process_id}/nodes/{node_id}/delegate-to-ai", tags=["metadata"])
-def delegate_node_to_ai(process_id: str, node_id: str, body: dict) -> dict:
-    """Persist the node's task breakdown and accept it for AI delegation."""
-    try:
-        validated = NodeTaskMetadata.from_payload(body)
-        payload = validated.model_dump()
-        with db.get_conn() as conn:
-            if ingestion.get_graph(conn, process_id) is None:
-                raise HTTPException(status_code=404, detail="Process not found.")
-            saved = metadata_svc.upsert_metadata(
-                conn,
-                process_id,
-                "node",
-                node_id,
-                payload,
-            )
-            db.touch_process_updated_at(conn, process_id)
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "status": "delegated",
-        "node_id": node_id,
-        "metadata": saved,
-    }
+@app.post("/api/process/delegate-planning", tags=["agentic"])
+async def delegate_planning_route(
+    body: delegate_planning.DelegatePlanningRequest,
+    _cdswuserstoken: Optional[str] = Cookie(None),
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """Proxy node task metadata to the Cloudera TaskPlanner Agent."""
+    token = _resolve_user_token(_cdswuserstoken, authorization)
+    result = await delegate_planning.submit_planning_request(body, token)
+    if not result.get("ok"):
+        status = 502 if str(result.get("detail", "")).startswith("gateway_") else 400
+        return JSONResponse(status_code=status, content=result)
+    return result
 
 
 # --- Static frontend (served only when a build exists) -----------------------

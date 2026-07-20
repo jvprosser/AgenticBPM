@@ -39,18 +39,6 @@ interface Props {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-async function readResponseError(res: Response, fallback: string): Promise<string> {
-  try {
-    const body = await res.json();
-    if (body?.detail) {
-      return typeof body.detail === "string" ? body.detail : fallback;
-    }
-  } catch {
-    /* non-JSON error body */
-  }
-  return `${fallback} (${res.status})`;
-}
-
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
   if (isNodeTaskMetadata(initial)) {
     return {
@@ -79,6 +67,7 @@ export default function MetadataPopover({
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [delegateBusy, setDelegateBusy] = useState(false);
   const [delegateError, setDelegateError] = useState<string | null>(null);
+  const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNode = useRef(nodeForm);
 
@@ -88,6 +77,7 @@ export default function MetadataPopover({
     latestNode.current = nextNode;
     setSaveState("idle");
     setDelegateError(null);
+    setDelegateNotice(null);
   }, [target?.ownerId, target?.ownerType]);
 
   const persist = useCallback(
@@ -177,31 +167,40 @@ export default function MetadataPopover({
     if (!target || target.ownerType !== "node") return;
     setDelegateBusy(true);
     setDelegateError(null);
+    setDelegateNotice(null);
     try {
       if (timer.current) {
         clearTimeout(timer.current);
         timer.current = null;
       }
       await persist(latestNode.current);
-      const res = await fetch(
-        `/api/processes/${processId}/nodes/${encodeURIComponent(target.ownerId)}/delegate-to-ai`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(latestNode.current),
-        }
-      );
-      if (!res.ok) {
-        throw new Error(await readResponseError(res, "Delegation failed"));
+      const res = await fetch("/api/process/delegate-planning", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          process_instance_id: processId,
+          target_node_id: target.ownerId,
+          final_activity: latestNode.current.final_activity,
+          finalized_artifact: latestNode.current.output_end_product,
+          subtasks: latestNode.current.data_sources,
+        }),
+      });
+      const body = (await res.json()) as {
+        ok?: boolean;
+        toast_message?: string;
+        metadata?: NodeTaskMetadata;
+      };
+      if (!res.ok || body.ok === false) {
+        throw new Error(body.toast_message || `Delegation failed (${res.status})`);
       }
-      const body = (await res.json()) as { metadata?: NodeTaskMetadata };
       if (body.metadata) {
         const next = normalizeNodeInitial(body.metadata);
         setNodeForm(next);
         latestNode.current = next;
         onSaved(target.ownerType, target.ownerId, body.metadata);
       }
+      setDelegateNotice(body.toast_message ?? "Task design submitted to Cloudera TaskPlanner.");
     } catch (e) {
       setDelegateError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -364,6 +363,11 @@ export default function MetadataPopover({
             >
               {delegateBusy ? "Delegating…" : "Delegate to AI"}
             </button>
+            {delegateNotice && (
+              <p className="metadata-popover__status metadata-popover__status--saved">
+                {delegateNotice}
+              </p>
+            )}
             {delegateError && (
               <p className="metadata-popover__status metadata-popover__status--error">
                 {delegateError}
