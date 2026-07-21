@@ -39,6 +39,32 @@ interface Props {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+interface DelegatePlanningResult {
+  ok?: boolean;
+  toast_message?: string;
+  trace_id?: string;
+  session_id?: string;
+  session_directory?: string | null;
+  workflow_events?: unknown[];
+  gateway_message?: string;
+  detail?: string;
+  metadata?: NodeTaskMetadata;
+}
+
+interface DelegateDialogState {
+  variant: "success" | "error";
+  title: string;
+  message: string;
+  result?: DelegatePlanningResult;
+}
+
+function formatDelegateEvents(events: unknown[] | undefined): string {
+  if (!events?.length) return "No workflow events were returned yet.";
+  return events
+    .map((event) => (typeof event === "string" ? event : JSON.stringify(event, null, 2)))
+    .join("\n\n");
+}
+
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
   if (isNodeTaskMetadata(initial)) {
     return {
@@ -66,8 +92,7 @@ export default function MetadataPopover({
   const [nodeForm, setNodeForm] = useState<NodeTaskMetadata>(normalizeNodeInitial(initial));
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [delegateBusy, setDelegateBusy] = useState(false);
-  const [delegateError, setDelegateError] = useState<string | null>(null);
-  const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
+  const [delegateDialog, setDelegateDialog] = useState<DelegateDialogState | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNode = useRef(nodeForm);
 
@@ -76,9 +101,17 @@ export default function MetadataPopover({
     setNodeForm(nextNode);
     latestNode.current = nextNode;
     setSaveState("idle");
-    setDelegateError(null);
-    setDelegateNotice(null);
+    setDelegateDialog(null);
   }, [target?.ownerId, target?.ownerType]);
+
+  useEffect(() => {
+    if (!delegateDialog) return;
+    const onKey = (evt: KeyboardEvent) => {
+      if (evt.key === "Escape") setDelegateDialog(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [delegateDialog]);
 
   const persist = useCallback(
     async (payload: NodeTaskMetadata) => {
@@ -166,8 +199,7 @@ export default function MetadataPopover({
   const handleDelegateToAI = async () => {
     if (!target || target.ownerType !== "node") return;
     setDelegateBusy(true);
-    setDelegateError(null);
-    setDelegateNotice(null);
+    setDelegateDialog(null);
     try {
       if (timer.current) {
         clearTimeout(timer.current);
@@ -186,13 +218,15 @@ export default function MetadataPopover({
           subtasks: latestNode.current.data_sources,
         }),
       });
-      const body = (await res.json()) as {
-        ok?: boolean;
-        toast_message?: string;
-        metadata?: NodeTaskMetadata;
-      };
+      const body = (await res.json()) as DelegatePlanningResult;
       if (!res.ok || body.ok === false) {
-        throw new Error(body.toast_message || `Delegation failed (${res.status})`);
+        setDelegateDialog({
+          variant: "error",
+          title: "Delegation Failed",
+          message: body.toast_message || `Delegation failed (${res.status})`,
+          result: body,
+        });
+        return;
       }
       if (body.metadata) {
         const next = normalizeNodeInitial(body.metadata);
@@ -200,9 +234,18 @@ export default function MetadataPopover({
         latestNode.current = next;
         onSaved(target.ownerType, target.ownerId, body.metadata);
       }
-      setDelegateNotice(body.toast_message ?? "Task design submitted to Cloudera TaskPlanner.");
+      setDelegateDialog({
+        variant: "success",
+        title: "Delegation Started",
+        message: body.toast_message ?? "Task design submitted to Cloudera TaskPlanner.",
+        result: body,
+      });
     } catch (e) {
-      setDelegateError(e instanceof Error ? e.message : String(e));
+      setDelegateDialog({
+        variant: "error",
+        title: "Delegation Failed",
+        message: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setDelegateBusy(false);
     }
@@ -221,7 +264,81 @@ export default function MetadataPopover({
       : "";
 
   return (
-    <aside
+    <>
+      {delegateDialog && (
+        <div
+          className="delegate-overlay"
+          role="presentation"
+          onClick={() => setDelegateDialog(null)}
+        >
+          <div
+            className={`delegate-dialog delegate-dialog--${delegateDialog.variant}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delegate-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="delegate-dialog__header">
+              <h2 id="delegate-dialog-title">{delegateDialog.title}</h2>
+              <button
+                type="button"
+                className="btn btn--sm delegate-dialog__close"
+                onClick={() => setDelegateDialog(null)}
+                aria-label="Close delegation result"
+              >
+                ×
+              </button>
+            </header>
+            <div className="delegate-dialog__body">
+              <p className="delegate-dialog__message">{delegateDialog.message}</p>
+              {delegateDialog.result?.gateway_message && (
+                <p className="delegate-dialog__detail">{delegateDialog.result.gateway_message}</p>
+              )}
+              {delegateDialog.variant === "success" && delegateDialog.result && (
+                <dl className="delegate-dialog__meta">
+                  {delegateDialog.result.trace_id && (
+                    <>
+                      <dt>Trace ID</dt>
+                      <dd>{delegateDialog.result.trace_id}</dd>
+                    </>
+                  )}
+                  {delegateDialog.result.session_id && (
+                    <>
+                      <dt>Session ID</dt>
+                      <dd>{delegateDialog.result.session_id}</dd>
+                    </>
+                  )}
+                  {delegateDialog.result.session_directory && (
+                    <>
+                      <dt>Session Directory</dt>
+                      <dd>{delegateDialog.result.session_directory}</dd>
+                    </>
+                  )}
+                </dl>
+              )}
+              {delegateDialog.variant === "success" && (
+                <>
+                  <h3 className="delegate-dialog__events-title">Workflow Events</h3>
+                  <pre className="delegate-dialog__events">
+                    {formatDelegateEvents(delegateDialog.result?.workflow_events)}
+                  </pre>
+                </>
+              )}
+            </div>
+            <footer className="delegate-dialog__footer">
+              <button
+                type="button"
+                className="btn btn--agentic"
+                onClick={() => setDelegateDialog(null)}
+              >
+                Close
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      <aside
       className={`metadata-popover${isGroupPanel ? "" : " metadata-popover--wide"}`}
       style={isGroupPanel ? undefined : { width: TASK_EDITOR_WIDTH_PX }}
       role="dialog"
@@ -363,16 +480,6 @@ export default function MetadataPopover({
             >
               {delegateBusy ? "Delegating…" : "Delegate to AI"}
             </button>
-            {delegateNotice && (
-              <p className="metadata-popover__status metadata-popover__status--saved">
-                {delegateNotice}
-              </p>
-            )}
-            {delegateError && (
-              <p className="metadata-popover__status metadata-popover__status--error">
-                {delegateError}
-              </p>
-            )}
           </section>
 
           <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
@@ -381,5 +488,6 @@ export default function MetadataPopover({
         </>
       )}
     </aside>
+    </>
   );
 }

@@ -684,6 +684,123 @@ body {
   width: 100%;
 }
 
+.metadata-delegate-btn {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.delegate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(8, 12, 18, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.delegate-dialog {
+  width: min(720px, 100%);
+  max-height: min(85vh, 820px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.delegate-dialog--success {
+  border-color: rgba(46, 160, 67, 0.45);
+}
+
+.delegate-dialog--error {
+  border-color: rgba(229, 83, 75, 0.45);
+}
+
+.delegate-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.delegate-dialog__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.delegate-dialog__close {
+  flex-shrink: 0;
+}
+
+.delegate-dialog__body {
+  padding: 1rem;
+  overflow: auto;
+}
+
+.delegate-dialog__message {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}
+
+.delegate-dialog__detail {
+  margin: 0 0 0.75rem;
+  color: var(--err);
+  font-size: 0.85rem;
+}
+
+.delegate-dialog__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+
+.delegate-dialog__meta dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.delegate-dialog__meta dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.delegate-dialog__events-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.delegate-dialog__events {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.delegate-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
 .btn--row-remove {
   align-self: flex-start;
   border-color: #7f1d1d;
