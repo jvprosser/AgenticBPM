@@ -47,6 +47,29 @@ DISCOVERY_BASE_URL = os.environ.get(
     "https://cai-agent-studio-z516vb.ml-dbfc64d1-783.go01-dem.ylcu-atmi.cloudera.site",
 )
 
+# Cloudera TaskPlanner workflow deployment (Delegate to AI).
+WORKFLOW_BASE_URL = os.environ.get(
+    "WORKFLOW_BASE_URL",
+    "https://workflow-53a9472b-dbfa-415e-b14f-c8fa1c5bf31b.ml-dbfc64d1-783.go01-dem.ylcu-atmi.cloudera.site",
+)
+WORKFLOW_API_KEY = os.environ.get("WORKFLOW_API_KEY", "")
+WORKFLOW_SSL_VERIFY = os.environ.get("WORKFLOW_SSL_VERIFY", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+WORKFLOW_TIMEOUT_S = float(os.environ.get("WORKFLOW_TIMEOUT_S", "60"))
+WORKFLOW_EVENTS_PREVIEW_LIMIT = int(os.environ.get("WORKFLOW_EVENTS_PREVIEW_LIMIT", "25"))
+WORKFLOW_DELEGATE_USER_INPUT = os.environ.get(
+    "WORKFLOW_DELEGATE_USER_INPUT",
+    (
+        "For each element in the data_sources array contained in the metadata JSON object, "
+        "find the appropriate actual data source in the atlas_metadata collection in Chroma, "
+        "update the input JSON to include the qualified name of the matching data source "
+        "along with a value."
+    ),
+)
+
 # Runtime handle for the uvicorn subprocess (set by backend/main.py). Stored here so it
 # survives notebook cell re-runs — imported modules are not re-executed.
 _pm_proc = None
