@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" 
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" 
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" 
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI" 
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+                  id="Definitions_AdvancedClaim" 
+                  targetNamespace="http://bpmn.io/schema/bpmn" 
+                  exporter="Camunda Modeler" 
+                  exporterVersion="5.0.0">
+
+  <!-- ===================================================================== -->
+  <!-- PROCESS DEFINITION                                                    -->
+  <!-- ===================================================================== -->
+  <bpmn:process id="Process_CarInsuranceClaim" name="Car Insurance Claim Processing" isExecutable="true">
+    
+    <!-- 1. Start Event: FNOL Ingestion -->
+    <bpmn:startEvent id="StartEvent_FNOL" name="First Notice of Loss (FNOL) Received">
+      <bpmn:outgoing>Flow_01</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- 2. Service Task: Policy & Coverage Verification -->
+    <bpmn:serviceTask id="Task_VerifyCoverage" name="Verify Policy Coverage and Effective Dates">
+      <bpmn:incoming>Flow_01</bpmn:incoming>
+      <bpmn:outgoing>Flow_02</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- 3. Gateway: Active Coverage Check -->
+    <bpmn:exclusiveGateway id="Gateway_CoverageCheck" name="Is Policy Active &amp; Valid?">
+      <bpmn:incoming>Flow_02</bpmn:incoming>
+      <bpmn:outgoing>Flow_CoverageValid</bpmn:outgoing>
+      <bpmn:outgoing>Flow_CoverageInvalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- 4. End Event: Claim Denied -->
+    <bpmn:endEvent id="EndEvent_ClaimDenied" name="Claim Denied (No Active Coverage)">
+      <bpmn:incoming>Flow_CoverageInvalid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- 5. Service Task: Automated Triage & Fraud Risk Scoring -->
+    <bpmn:serviceTask id="Task_TriageAndReserving" name="Calculate Initial Loss Reserve and Score Risk">
+      <bpmn:incoming>Flow_CoverageValid</bpmn:incoming>
+      <bpmn:outgoing>Flow_03</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- 6. User Task: Adjuster Assessment & Repair Estimation -->
+    <bpmn:userTask id="Task_RepairManagement" name="Assign Adjuster &amp; Review Vendor Estimates">
+      <bpmn:incoming>Flow_03</bpmn:incoming>
+      <bpmn:outgoing>Flow_04</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- 7. Service Task: Financial Payout Disbursement -->
+    <bpmn:serviceTask id="Task_DisbursePayout" name="Disburse Payout Transactions &amp; Apply Deductible">
+      <bpmn:incoming>Flow_04</bpmn:incoming>
+      <bpmn:outgoing>Flow_05</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- 8. Gateway: Subrogation Check -->
+    <bpmn:exclusiveGateway id="Gateway_SubrogationCheck" name="Is Subrogation Required?">
+      <bpmn:incoming>Flow_05</bpmn:incoming>
+      <bpmn:outgoing>Flow_SubrogationYes</bpmn:outgoing>
+      <bpmn:outgoing>Flow_SubrogationNo</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- 9. User Task: Subrogation Recovery -->
+    <bpmn:userTask id="Task_SubrogationRecovery" name="Pursue Third-Party Subrogation Recovery">
+      <bpmn:incoming>Flow_SubrogationYes</bpmn:incoming>
+      <bpmn:outgoing>Flow_06</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- 10. End Event: Claim Settled & Closed -->
+    <bpmn:endEvent id="EndEvent_ClaimClosed" name="Claim Settled &amp; Closed">
+      <bpmn:incoming>Flow_SubrogationNo</bpmn:incoming>
+      <bpmn:incoming>Flow_06</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="Flow_01" sourceRef="StartEvent_FNOL" targetRef="Task_VerifyCoverage" />
+    <bpmn:sequenceFlow id="Flow_02" sourceRef="Task_VerifyCoverage" targetRef="Gateway_CoverageCheck" />
+    <bpmn:sequenceFlow id="Flow_CoverageValid" name="Yes" sourceRef="Gateway_CoverageCheck" targetRef="Task_TriageAndReserving" />
+    <bpmn:sequenceFlow id="Flow_CoverageInvalid" name="No" sourceRef="Gateway_CoverageCheck" targetRef="EndEvent_ClaimDenied" />
+    <bpmn:sequenceFlow id="Flow_03" sourceRef="Task_TriageAndReserving" targetRef="Task_RepairManagement" />
+    <bpmn:sequenceFlow id="Flow_04" sourceRef="Task_RepairManagement" targetRef="Task_DisbursePayout" />
+    <bpmn:sequenceFlow id="Flow_05" sourceRef="Task_DisbursePayout" targetRef="Gateway_SubrogationCheck" />
+    <bpmn:sequenceFlow id="Flow_SubrogationYes" name="Yes" sourceRef="Gateway_SubrogationCheck" targetRef="Task_SubrogationRecovery" />
+    <bpmn:sequenceFlow id="Flow_SubrogationNo" name="No" sourceRef="Gateway_SubrogationCheck" targetRef="EndEvent_ClaimClosed" />
+    <bpmn:sequenceFlow id="Flow_06" sourceRef="Task_SubrogationRecovery" targetRef="EndEvent_ClaimClosed" />
+
+  </bpmn:process>
+
+  <!-- ===================================================================== -->
+  <!-- BPMN DIAGRAM LAYOUT METADATA (BPMNDI)                                 -->
+  <!-- ===================================================================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_CarInsuranceClaim">
+      
+      <!-- Start Event -->
+      <bpmndi:BPMNShape id="StartEvent_FNOL_di" bpmnElement="StartEvent_FNOL">
+        <dc:Bounds x="160" y="100" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="135" y="143" width="87" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Verify Coverage -->
+      <bpmndi:BPMNShape id="Task_VerifyCoverage_di" bpmnElement="Task_VerifyCoverage">
+        <dc:Bounds x="250" y="78" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Gateway: Coverage Check -->
+      <bpmndi:BPMNShape id="Gateway_CoverageCheck_di" bpmnElement="Gateway_CoverageCheck" isMarkerVisible="true">
+        <dc:Bounds x="400" y="93" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="386" y="63" width="79" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- End Event: Claim Denied -->
+      <bpmndi:BPMNShape id="EndEvent_ClaimDenied_di" bpmnElement="EndEvent_ClaimDenied">
+        <dc:Bounds x="407" y="220" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="388" y="263" width="74" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Triage & Reserving -->
+      <bpmndi:BPMNShape id="Task_TriageAndReserving_di" bpmnElement="Task_TriageAndReserving">
+        <dc:Bounds x="500" y="78" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Repair Management -->
+      <bpmndi:BPMNShape id="Task_RepairManagement_di" bpmnElement="Task_RepairManagement">
+        <dc:Bounds x="650" y="78" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Disburse Payout -->
+      <bpmndi:BPMNShape id="Task_DisbursePayout_di" bpmnElement="Task_DisbursePayout">
+        <dc:Bounds x="800" y="78" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Gateway: Subrogation Check -->
+      <bpmndi:BPMNShape id="Gateway_SubrogationCheck_di" bpmnElement="Gateway_SubrogationCheck" isMarkerVisible="true">
+        <dc:Bounds x="950" y="93" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="937" y="63" width="76" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Subrogation Recovery -->
+      <bpmndi:BPMNShape id="Task_SubrogationRecovery_di" bpmnElement="Task_SubrogationRecovery">
+        <dc:Bounds x="925" y="200" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- End Event: Claim Closed -->
+      <bpmndi:BPMNShape id="EndEvent_ClaimClosed_di" bpmnElement="EndEvent_ClaimClosed">
+        <dc:Bounds x="1100" y="100" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1083" y="143" width="70" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- DIAGRAM EDGES / FLOW LINES -->
+      <bpmndi:BPMNEdge id="Flow_01_di" bpmnElement="Flow_01">
+        <di:waypoint x="196" y="118" />
+        <di:waypoint x="250" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_02_di" bpmnElement="Flow_02">
+        <di:waypoint x="350" y="118" />
+        <di:waypoint x="400" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_CoverageValid_di" bpmnElement="Flow_CoverageValid">
+        <di:waypoint x="450" y="118" />
+        <di:waypoint x="500" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_CoverageInvalid_di" bpmnElement="Flow_CoverageInvalid">
+        <di:waypoint x="425" y="143" />
+        <di:waypoint x="425" y="220" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_03_di" bpmnElement="Flow_03">
+        <di:waypoint x="600" y="118" />
+        <di:waypoint x="650" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_04_di" bpmnElement="Flow_04">
+        <di:waypoint x="750" y="118" />
+        <di:waypoint x="800" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_05_di" bpmnElement="Flow_05">
+        <di:waypoint x="900" y="118" />
+        <di:waypoint x="950" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_SubrogationYes_di" bpmnElement="Flow_SubrogationYes">
+        <di:waypoint x="975" y="143" />
+        <di:waypoint x="975" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_SubrogationNo_di" bpmnElement="Flow_SubrogationNo">
+        <di:waypoint x="1000" y="118" />
+        <di:waypoint x="1100" y="118" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_06_di" bpmnElement="Flow_06">
+        <di:waypoint x="1025" y="240" />
+        <di:waypoint x="1118" y="240" />
+        <di:waypoint x="1118" y="136" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
