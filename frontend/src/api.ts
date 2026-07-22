@@ -45,6 +45,11 @@ export interface DataSourceProcedure {
   artifact_path_pattern?: string;
   qualified_name?: string;
   destination?: string;
+  business_terms?: string | string[];
+  classifications?: string | string[] | Record<string, unknown>;
+  asset_type?: string;
+  owner?: string;
+  description?: string;
 }
 
 export interface NodeTaskMetadata {

@@ -27,6 +27,11 @@ class SubtaskItem(BaseModel):
     artifact_path_pattern: Optional[str] = ""
     qualified_name: Optional[str] = ""
     destination: Optional[str] = ""
+    business_terms: Optional[Any] = None
+    classifications: Optional[Any] = None
+    asset_type: Optional[str] = ""
+    owner: Optional[str] = ""
+    description: Optional[str] = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -58,6 +63,9 @@ class SubtaskItem(BaseModel):
         "artifact_path_pattern",
         "qualified_name",
         "destination",
+        "asset_type",
+        "owner",
+        "description",
         mode="before",
     )
     @classmethod
@@ -137,6 +145,11 @@ def _subtask_item_has_content(entry: SubtaskItem) -> bool:
         or entry.data_destinations
         or entry.qualified_name
         or entry.destination
+        or entry.business_terms
+        or entry.classifications
+        or entry.asset_type
+        or entry.owner
+        or entry.description
         or entry.agent_endpoint_key
         or entry.artifact_path_pattern
         or entry.input_parameter_mappings

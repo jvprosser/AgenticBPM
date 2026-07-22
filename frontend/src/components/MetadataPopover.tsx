@@ -10,9 +10,16 @@ import {
   type NodeTaskMetadata,
 } from "../api";
 import AssistantGroupPopover from "./AssistantGroupPopover";
+import AIDelegationReviewModal from "./AIDelegationReviewModal";
+import CatalogMetadataCard from "./CatalogMetadataCard";
 import ExecutionCockpit from "./execution/ExecutionCockpit";
 import TaskModeSwitcher from "./execution/TaskModeSwitcher";
 import type { TaskViewMode } from "./execution/types";
+import {
+  parseAugmentedPayload,
+  payloadToNodeMetadata,
+  type AIDelegationPayload,
+} from "../lib/delegationFormatting";
 
 const DEBOUNCE_MS = 400;
 const TASK_EDITOR_WIDTH_PX = 600;
@@ -78,100 +85,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function unescapeNewlines(text: string): string {
-  return text.replace(/\\n/g, "\n");
-}
-
-function tryParseJson(text: string): unknown | null {
-  try {
-    return JSON.parse(text.trim());
-  } catch {
-    return null;
-  }
-}
-
-function extractEnrichedJsonFromText(text: string): unknown | null {
-  const normalized = unescapeNewlines(text);
-
-  for (const match of normalized.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)) {
-    const parsed = tryParseJson(match[1]);
-    if (parsed !== null) return parsed;
-  }
-
-  const braceStart = normalized.indexOf("{");
-  const braceEnd = normalized.lastIndexOf("}");
-  if (braceStart >= 0 && braceEnd > braceStart) {
-    const parsed = tryParseJson(normalized.slice(braceStart, braceEnd + 1));
-    if (parsed !== null) return parsed;
-  }
-
-  return tryParseJson(normalized);
-}
-
-function findFinalResultText(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findFinalResultText(item);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    const preferredKeys = [
-      "output",
-      "result",
-      "content",
-      "message",
-      "text",
-      "answer",
-      "final_answer",
-      "finalAnswer",
-      "data",
-      "payload",
-    ];
-    for (const key of preferredKeys) {
-      if (key in obj) {
-        const found = findFinalResultText(obj[key]);
-        if (found) return found;
-      }
-    }
-    for (const v of Object.values(obj)) {
-      if (typeof v === "string" && v.includes("Final Enriched JSON Object")) {
-        return v;
-      }
-    }
-    for (const v of Object.values(obj)) {
-      if (typeof v === "string" && (v.includes("```json") || v.includes("Final Answer"))) {
-        return v;
-      }
-    }
-  }
-  return null;
-}
-
-function formatDelegateFinalResult(value: unknown): string {
-  const text = findFinalResultText(value);
-  if (text) {
-    const parsed = extractEnrichedJsonFromText(text);
-    if (parsed !== null) {
-      return JSON.stringify(parsed, null, 2);
-    }
-    return unescapeNewlines(text);
-  }
-  if (typeof value === "string") {
-    const parsed = extractEnrichedJsonFromText(value);
-    if (parsed !== null) return JSON.stringify(parsed, null, 2);
-    return unescapeNewlines(value);
-  }
-  if (typeof value === "object" && value !== null) {
-    return JSON.stringify(value, null, 2);
-  }
-  return "No data available.";
-}
-
 function normalizeDataSource(row: DataSourceProcedure & { human_procedure?: string }): DataSourceProcedure {
   const executionMode =
     row.execution_mode === "user_manual" || row.execution_mode === "agent_automated"
@@ -189,6 +102,11 @@ function normalizeDataSource(row: DataSourceProcedure & { human_procedure?: stri
     artifact_path_pattern: row.artifact_path_pattern ?? "",
     qualified_name: row.qualified_name ?? "",
     destination: row.destination ?? "",
+    business_terms: row.business_terms,
+    classifications: row.classifications,
+    asset_type: row.asset_type ?? "",
+    owner: row.owner ?? "",
+    description: row.description ?? "",
   };
 }
 
@@ -220,6 +138,7 @@ export default function MetadataPopover({
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [delegateBusy, setDelegateBusy] = useState(false);
   const [delegateDialog, setDelegateDialog] = useState<DelegateDialogState | null>(null);
+  const [reviewPayload, setReviewPayload] = useState<AIDelegationPayload | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNode = useRef(nodeForm);
 
@@ -229,17 +148,21 @@ export default function MetadataPopover({
     latestNode.current = nextNode;
     setSaveState("idle");
     setDelegateDialog(null);
+    setReviewPayload(null);
     setViewMode("authoring");
   }, [target?.ownerId, target?.ownerType]);
 
   useEffect(() => {
-    if (!delegateDialog) return;
+    if (!delegateDialog && !reviewPayload) return;
     const onKey = (evt: KeyboardEvent) => {
-      if (evt.key === "Escape") setDelegateDialog(null);
+      if (evt.key === "Escape") {
+        setDelegateDialog(null);
+        setReviewPayload(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [delegateDialog]);
+  }, [delegateDialog, reviewPayload]);
 
   const persist = useCallback(
     async (payload: NodeTaskMetadata) => {
@@ -325,6 +248,18 @@ export default function MetadataPopover({
     }));
   };
 
+  const handleAcceptDelegation = useCallback(
+    async (payload: AIDelegationPayload) => {
+      if (!target) return;
+      const next = payloadToNodeMetadata(payload);
+      setNodeForm(next);
+      latestNode.current = next;
+      setReviewPayload(null);
+      await persist(next);
+    },
+    [persist, target]
+  );
+
   const handleDelegateToAI = async () => {
     if (!target || target.ownerType !== "node") return;
     setDelegateBusy(true);
@@ -373,7 +308,7 @@ export default function MetadataPopover({
 
       setDelegateDialog({
         variant: "running",
-        title: "Workflow Running",
+        title: "Process Automation Underway",
         message: started.toast_message ?? "Waiting for crew_kickoff_completed…",
       });
 
@@ -394,18 +329,20 @@ export default function MetadataPopover({
         }
 
         if (polled.ok !== false && polled.status === "completed") {
-          if (polled.metadata) {
-            const next = normalizeNodeInitial(polled.metadata);
-            setNodeForm(next);
-            latestNode.current = next;
-            onSaved(target.ownerType, target.ownerId, polled.metadata);
+          const augmented = parseAugmentedPayload(polled);
+          if (!augmented) {
+            setDelegateDialog({
+              variant: "error",
+              title: "Delegation Failed",
+              message:
+                polled.toast_message ??
+                "Workflow completed but no augmented task breakdown payload was returned.",
+              result: polled,
+            });
+            return;
           }
-          setDelegateDialog({
-            variant: "success",
-            title: "Delegation Complete",
-            message: polled.toast_message ?? "Workflow completed successfully.",
-            result: polled,
-          });
+          setDelegateDialog(null);
+          setReviewPayload(augmented);
           return;
         }
 
@@ -453,7 +390,16 @@ export default function MetadataPopover({
 
   return (
     <>
-      {delegateDialog && (
+      {reviewPayload ? (
+        <AIDelegationReviewModal
+          open
+          payload={reviewPayload}
+          onCancel={() => setReviewPayload(null)}
+          onAccept={() => void handleAcceptDelegation(reviewPayload)}
+        />
+      ) : null}
+
+      {delegateDialog && delegateDialog.variant !== "success" && (
         <div
           className="delegate-overlay"
           role="presentation"
@@ -481,14 +427,6 @@ export default function MetadataPopover({
               <p className="delegate-dialog__message">{delegateDialog.message}</p>
               {delegateDialog.result?.gateway_message && (
                 <p className="delegate-dialog__detail">{delegateDialog.result.gateway_message}</p>
-              )}
-              {delegateDialog.variant === "success" && delegateDialog.result?.final_result != null && (
-                <>
-                  <h3 className="delegate-dialog__events-title">Workflow Result</h3>
-                  <pre className="delegate-dialog__events delegate-dialog__events--primary">
-                    {formatDelegateFinalResult(delegateDialog.result.final_result)}
-                  </pre>
-                </>
               )}
             </div>
             <footer className="delegate-dialog__footer">
@@ -602,24 +540,7 @@ export default function MetadataPopover({
                               }
                             />
                           </label>
-                          {row.qualified_name ? (
-                            <div className="metadata-enriched-block">
-                              <span className="metadata-enriched-block__label">Qualified Location:</span>
-                              <code className="metadata-enriched-block__value">
-                                {row.qualified_name}
-                              </code>
-                            </div>
-                          ) : null}
-                          {row.destination ? (
-                            <div className="metadata-enriched-block">
-                              <span className="metadata-enriched-block__label">
-                                Platform Destination Status:
-                              </span>
-                              <code className="metadata-enriched-block__value">
-                                {row.destination}
-                              </code>
-                            </div>
-                          ) : null}
+                          <CatalogMetadataCard source={row} />
                           <label className="metadata-field">
                             <span>Execution Mode</span>
                             <select
