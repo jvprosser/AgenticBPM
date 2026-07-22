@@ -720,6 +720,15 @@ body {
   border-color: rgba(229, 83, 75, 0.45);
 }
 
+.delegate-dialog--running {
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.delegate-dialog__spinner {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
 .delegate-dialog__header {
   display: flex;
   align-items: flex-start;

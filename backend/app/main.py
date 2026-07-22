@@ -315,9 +315,24 @@ async def delegate_planning_route(
     _cdswuserstoken: Optional[str] = Cookie(None),
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    """Proxy node task metadata to the Cloudera TaskPlanner Agent."""
+    """Kick off Cloudera TaskPlanner workflow; poll via GET delegate-planning/poll."""
     token = _resolve_user_token(_cdswuserstoken, authorization)
-    result = await delegate_planning.submit_planning_request(body, token)
+    result = await delegate_planning.start_planning_request(body, token)
+    if not result.get("ok"):
+        status = 502 if str(result.get("detail", "")).startswith("gateway_") else 400
+        return JSONResponse(status_code=status, content=result)
+    return result
+
+
+@app.get("/api/process/delegate-planning/poll", tags=["agentic"])
+async def delegate_planning_poll_route(
+    trace_id: str,
+    _cdswuserstoken: Optional[str] = Cookie(None),
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """Poll one workflow events batch; browser repeats until status is completed."""
+    token = _resolve_user_token(_cdswuserstoken, authorization)
+    result = await delegate_planning.poll_planning_status(trace_id, token)
     if not result.get("ok"):
         status = 502 if str(result.get("detail", "")).startswith("gateway_") else 400
         return JSONResponse(status_code=status, content=result)

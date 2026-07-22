@@ -41,6 +41,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 interface DelegatePlanningResult {
   ok?: boolean;
+  status?: "running" | "completed" | "timeout" | "error";
   toast_message?: string;
   trace_id?: string;
   session_id?: string;
@@ -54,16 +55,24 @@ interface DelegatePlanningResult {
     file_path?: string;
   } | null;
   poll_completed?: boolean;
+  poll_count?: number;
   gateway_message?: string;
   detail?: string;
   metadata?: NodeTaskMetadata;
 }
 
 interface DelegateDialogState {
-  variant: "success" | "error";
+  variant: "success" | "error" | "running";
   title: string;
   message: string;
   result?: DelegatePlanningResult;
+}
+
+const DELEGATE_POLL_INTERVAL_MS = 2000;
+const DELEGATE_POLL_TIMEOUT_MS = 300_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatJsonBlock(value: unknown): string {
@@ -236,27 +245,90 @@ export default function MetadataPopover({
           subtasks: latestNode.current.data_sources,
         }),
       });
-      const body = (await res.json()) as DelegatePlanningResult;
-      if (!res.ok || body.ok === false) {
+      const started = (await res.json()) as DelegatePlanningResult;
+      if (!res.ok || started.ok === false) {
         setDelegateDialog({
           variant: "error",
           title: "Delegation Failed",
-          message: body.toast_message || `Delegation failed (${res.status})`,
-          result: body,
+          message: started.toast_message || `Delegation failed (${res.status})`,
+          result: started,
         });
         return;
       }
-      if (body.metadata) {
-        const next = normalizeNodeInitial(body.metadata);
-        setNodeForm(next);
-        latestNode.current = next;
-        onSaved(target.ownerType, target.ownerId, body.metadata);
+
+      const traceId = started.trace_id;
+      if (!traceId) {
+        setDelegateDialog({
+          variant: "error",
+          title: "Delegation Failed",
+          message: "Workflow started but no trace_id was returned.",
+          result: started,
+        });
+        return;
       }
+
+      const showRunningDialog = (body: DelegatePlanningResult) => {
+        setDelegateDialog({
+          variant: "running",
+          title: "Workflow Running",
+          message: body.toast_message ?? "Polling workflow events…",
+          result: body,
+        });
+      };
+
+      showRunningDialog(started);
+
+      const deadline = Date.now() + DELEGATE_POLL_TIMEOUT_MS;
+      let finalResult: DelegatePlanningResult = started;
+
+      while (Date.now() < deadline) {
+        await sleep(DELEGATE_POLL_INTERVAL_MS);
+        const pollRes = await fetch(
+          `/api/process/delegate-planning/poll?trace_id=${encodeURIComponent(traceId)}`,
+          { credentials: "include" }
+        );
+        const polled = (await pollRes.json()) as DelegatePlanningResult;
+        finalResult = polled;
+
+        if (polled.status === "running" && polled.ok !== false) {
+          showRunningDialog(polled);
+          continue;
+        }
+
+        if (polled.ok !== false && polled.status === "completed") {
+          if (polled.metadata) {
+            const next = normalizeNodeInitial(polled.metadata);
+            setNodeForm(next);
+            latestNode.current = next;
+            onSaved(target.ownerType, target.ownerId, polled.metadata);
+          }
+          setDelegateDialog({
+            variant: "success",
+            title: "Delegation Complete",
+            message: polled.toast_message ?? "Workflow completed successfully.",
+            result: polled,
+          });
+          return;
+        }
+
+        setDelegateDialog({
+          variant: "error",
+          title: "Delegation Failed",
+          message:
+            polled.toast_message ||
+            (pollRes.ok ? "Workflow did not complete successfully." : `Poll failed (${pollRes.status})`),
+          result: polled,
+        });
+        return;
+      }
+
       setDelegateDialog({
-        variant: "success",
-        title: "Delegation Complete",
-        message: body.toast_message ?? "Workflow completed successfully.",
-        result: body,
+        variant: "error",
+        title: "Delegation Timed Out",
+        message:
+          finalResult.toast_message ??
+          `Workflow polling timed out after ${DELEGATE_POLL_TIMEOUT_MS / 1000}s.`,
+        result: finalResult,
       });
     } catch (e) {
       setDelegateDialog({
@@ -312,7 +384,8 @@ export default function MetadataPopover({
               {delegateDialog.result?.gateway_message && (
                 <p className="delegate-dialog__detail">{delegateDialog.result.gateway_message}</p>
               )}
-              {delegateDialog.variant === "success" && delegateDialog.result && (
+              {(delegateDialog.variant === "success" || delegateDialog.variant === "running") &&
+                delegateDialog.result && (
                 <dl className="delegate-dialog__meta">
                   {delegateDialog.result.trace_id && (
                     <>
@@ -326,13 +399,19 @@ export default function MetadataPopover({
                       <dd>{delegateDialog.result.session_id}</dd>
                     </>
                   )}
-                  {delegateDialog.result.artifact_upload?.file_path && (
+                  {delegateDialog.result.poll_count != null && (
+                    <>
+                      <dt>Poll count</dt>
+                      <dd>{delegateDialog.result.poll_count}</dd>
+                    </>
+                  )}
+                  {delegateDialog.variant === "success" && delegateDialog.result.artifact_upload?.file_path && (
                     <>
                       <dt>Artifact Path</dt>
                       <dd>{delegateDialog.result.artifact_upload.file_path}</dd>
                     </>
                   )}
-                  {delegateDialog.result.local_artifact_path && (
+                  {delegateDialog.variant === "success" && delegateDialog.result.local_artifact_path && (
                     <>
                       <dt>Local Artifact</dt>
                       <dd>{delegateDialog.result.local_artifact_path}</dd>
@@ -348,9 +427,13 @@ export default function MetadataPopover({
                   </pre>
                 </>
               )}
-              {delegateDialog.variant === "success" && (
+              {(delegateDialog.variant === "success" || delegateDialog.variant === "running") && (
                 <>
-                  <h3 className="delegate-dialog__events-title">Workflow Events (Debug)</h3>
+                  <h3 className="delegate-dialog__events-title">
+                    {delegateDialog.variant === "running"
+                      ? "Workflow Events (live)"
+                      : "Workflow Events (Debug)"}
+                  </h3>
                   <pre className="delegate-dialog__events">
                     {formatDelegateEvents(delegateDialog.result?.workflow_events)}
                   </pre>
@@ -358,13 +441,19 @@ export default function MetadataPopover({
               )}
             </div>
             <footer className="delegate-dialog__footer">
-              <button
-                type="button"
-                className="btn btn--agentic"
-                onClick={() => setDelegateDialog(null)}
-              >
-                Close
-              </button>
+              {delegateDialog.variant === "running" ? (
+                <span className="delegate-dialog__spinner" aria-live="polite">
+                  Polling workflow…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--agentic"
+                  onClick={() => setDelegateDialog(null)}
+                >
+                  Close
+                </button>
+              )}
             </footer>
           </div>
         </div>

@@ -33,6 +33,9 @@ _ENRICHED_KEYS = (
     "Enriched JSON Object",
 )
 
+# In-memory workflow poll sessions keyed by trace_id (browser-driven polling).
+_poll_sessions: dict[str, dict[str, Any]] = {}
+
 
 class SubtaskRow(BaseModel):
     source_name: str = ""
@@ -283,6 +286,374 @@ async def _poll_workflow_until_complete(
     return all_events, _extract_enriched_json(all_events), False
 
 
+def _merge_event_batch(state: dict[str, Any], batch: list[Any]) -> None:
+    seen = set(state["seen"])
+    for event in batch:
+        fingerprint = _event_fingerprint(event)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        state["seen"].append(fingerprint)
+        state["events"].append(event)
+    state["seen"] = list(seen)
+
+
+def _build_completed_response(state: dict[str, Any], token_source: str) -> dict[str, Any]:
+    body = DelegatePlanningRequest.model_validate(state["body"])
+    enriched_json = state.get("enriched_json")
+    artifact_upload = state.get("artifact_upload")
+    upload_path = (
+        artifact_upload.get("file_path") if isinstance(artifact_upload, dict) else None
+    )
+    toast = "Workflow completed."
+    if upload_path:
+        toast = f"Workflow completed. Artifact uploaded to {upload_path}."
+
+    return {
+        "ok": True,
+        "status": "completed",
+        "toast_message": toast,
+        "process_instance_id": body.process_instance_id,
+        "target_node_id": body.target_node_id,
+        "metadata": state.get("metadata"),
+        "workflow_base_url": config.WORKFLOW_BASE_URL,
+        "token_source": token_source,
+        "session_id": state["session_id"],
+        "session_directory": state.get("session_directory"),
+        "trace_id": state["trace_id"],
+        "workflow_events": state["events"],
+        "enriched_json": enriched_json,
+        "local_artifact_path": state.get("local_artifact_path"),
+        "artifact_upload": artifact_upload,
+        "poll_completed": True,
+        "poll_count": state.get("poll_count", 0),
+    }
+
+
+async def _finalize_completed_session(
+    client: httpx.AsyncClient,
+    token: str,
+    state: dict[str, Any],
+) -> None:
+    body = DelegatePlanningRequest.model_validate(state["body"])
+    trace_id = state["trace_id"]
+    enriched_json = _extract_enriched_json(state["events"])
+    state["enriched_json"] = enriched_json
+    state["completed"] = True
+
+    if enriched_json is None:
+        return
+
+    local_artifact_path = _save_local_artifact(body, trace_id, enriched_json)
+    state["local_artifact_path"] = local_artifact_path
+    artifact_filename = f"{trace_id}_enriched.json"
+    try:
+        state["artifact_upload"] = await _upload_enriched_artifact(
+            client,
+            token,
+            state["session_id"],
+            artifact_filename,
+            Path(local_artifact_path).read_bytes(),
+        )
+    except Exception as exc:
+        logger.warning("Workflow artifact upload failed: %s", exc)
+        state["artifact_upload"] = {"success": False, "message": str(exc)}
+
+
+async def start_planning_request(
+    body: DelegatePlanningRequest,
+    user_token: Optional[str],
+) -> dict[str, Any]:
+    """Persist metadata, create session, kickoff workflow; polling continues via GET."""
+    token, token_source = _resolve_workflow_token(user_token)
+    if not token:
+        return {
+            "ok": False,
+            "toast_message": (
+                "Cloudera authentication required. Set WORKFLOW_API_KEY / CDSW_APIV2_KEY "
+                "or CLOUDERA_AI_TOKEN on the backend, or sign in to Cloudera AI."
+            ),
+            "detail": "no_auth_token",
+        }
+
+    try:
+        saved_metadata = _persist_node_metadata(body)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "toast_message": str(exc),
+            "detail": "process_not_found",
+        }
+
+    kickoff_inputs = _build_kickoff_inputs(body)
+    logger.info(
+        "TaskPlanner workflow kickoff process=%s node=%s subtasks=%d base_url=%s",
+        body.process_instance_id,
+        body.target_node_id,
+        len(body.subtasks),
+        config.WORKFLOW_BASE_URL,
+    )
+    logger.debug("TaskPlanner kickoff inputs=%s", kickoff_inputs)
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=config.WORKFLOW_TIMEOUT_S,
+            verify=config.WORKFLOW_SSL_VERIFY,
+        ) as client:
+            session_id, session_directory = await _create_workflow_session(client, token)
+            trace_id = await _kickoff_workflow(client, token, body)
+
+        _poll_sessions[trace_id] = {
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "session_directory": session_directory,
+            "body": body.model_dump(),
+            "metadata": saved_metadata,
+            "token_source": token_source,
+            "events": [],
+            "seen": [],
+            "started_at": time.monotonic(),
+            "completed": False,
+            "poll_count": 0,
+            "enriched_json": None,
+            "local_artifact_path": None,
+            "artifact_upload": None,
+        }
+
+        return {
+            "ok": True,
+            "status": "running",
+            "toast_message": f"Workflow started. Trace ID: {trace_id}",
+            "process_instance_id": body.process_instance_id,
+            "target_node_id": body.target_node_id,
+            "metadata": saved_metadata,
+            "workflow_base_url": config.WORKFLOW_BASE_URL,
+            "token_source": token_source,
+            "session_id": session_id,
+            "session_directory": session_directory,
+            "trace_id": trace_id,
+            "workflow_events": [],
+            "poll_completed": False,
+        }
+    except httpx.HTTPStatusError as exc:
+        return _workflow_http_error(exc, saved_metadata)
+    except httpx.TimeoutException:
+        return _workflow_timeout_error(saved_metadata)
+    except httpx.RequestError as exc:
+        return _workflow_unreachable_error(exc, saved_metadata)
+    except ValueError as exc:
+        return _workflow_invalid_error(exc, saved_metadata)
+    except Exception as exc:
+        logger.exception("TaskPlanner workflow kickoff failed")
+        return _workflow_unexpected_error(exc, saved_metadata)
+
+
+async def poll_planning_status(
+    trace_id: str,
+    user_token: Optional[str],
+) -> dict[str, Any]:
+    """Fetch one workflow events batch; browser calls this repeatedly until complete."""
+    state = _poll_sessions.get(trace_id)
+    if state is None:
+        return {
+            "ok": False,
+            "toast_message": f"Unknown or expired workflow trace_id: {trace_id}",
+            "detail": "unknown_trace_id",
+        }
+
+    token_source = state.get("token_source", "unknown")
+    if state.get("completed"):
+        return _build_completed_response(state, token_source)
+
+    elapsed = time.monotonic() - float(state["started_at"])
+    if elapsed > config.WORKFLOW_POLL_TIMEOUT_S:
+        return {
+            "ok": False,
+            "status": "timeout",
+            "toast_message": (
+                f"Workflow polling timed out after {config.WORKFLOW_POLL_TIMEOUT_S:.0f}s "
+                f"for trace {trace_id}."
+            ),
+            "detail": "poll_timeout",
+            "trace_id": trace_id,
+            "session_id": state["session_id"],
+            "workflow_events": state["events"],
+            "enriched_json": state.get("enriched_json"),
+            "poll_completed": False,
+            "poll_count": state.get("poll_count", 0),
+        }
+
+    token, _ = _resolve_workflow_token(user_token)
+    if not token:
+        return {
+            "ok": False,
+            "toast_message": "Cloudera authentication required for workflow polling.",
+            "detail": "no_auth_token",
+            "trace_id": trace_id,
+        }
+
+    state["poll_count"] = int(state.get("poll_count", 0)) + 1
+    logger.info(
+        "Workflow poll #%s trace_id=%s -> GET %s",
+        state["poll_count"],
+        trace_id,
+        _EVENTS_PATH,
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=config.WORKFLOW_TIMEOUT_S,
+            verify=config.WORKFLOW_SSL_VERIFY,
+        ) as client:
+            batch = await _fetch_workflow_events_batch(client, token, trace_id)
+            _merge_event_batch(state, batch)
+
+            if _workflow_completed(state["events"]):
+                await _finalize_completed_session(client, token, state)
+                enriched_json = state.get("enriched_json")
+                if enriched_json is None:
+                    return {
+                        "ok": False,
+                        "status": "completed",
+                        "toast_message": (
+                            "Workflow completed but no Enriched JSON Object was found."
+                        ),
+                        "detail": "enriched_json_missing",
+                        "trace_id": trace_id,
+                        "session_id": state["session_id"],
+                        "workflow_events": state["events"],
+                        "poll_completed": True,
+                        "poll_count": state["poll_count"],
+                    }
+                return _build_completed_response(state, token_source)
+
+            return {
+                "ok": True,
+                "status": "running",
+                "toast_message": f"Polling workflow events ({len(state['events'])} received)…",
+                "trace_id": trace_id,
+                "session_id": state["session_id"],
+                "workflow_events": state["events"],
+                "poll_completed": False,
+                "poll_count": state["poll_count"],
+            }
+    except httpx.HTTPStatusError as exc:
+        err = _workflow_http_error(exc, state.get("metadata"))
+        err["trace_id"] = trace_id
+        err["status"] = "error"
+        return err
+    except httpx.TimeoutException:
+        err = _workflow_timeout_error(state.get("metadata"))
+        err["trace_id"] = trace_id
+        err["status"] = "error"
+        return err
+    except httpx.RequestError as exc:
+        err = _workflow_unreachable_error(exc, state.get("metadata"))
+        err["trace_id"] = trace_id
+        err["status"] = "error"
+        return err
+    except ValueError as exc:
+        err = _workflow_invalid_error(exc, state.get("metadata"))
+        err["trace_id"] = trace_id
+        err["status"] = "error"
+        return err
+    except Exception as exc:
+        logger.exception("TaskPlanner workflow poll failed trace_id=%s", trace_id)
+        err = _workflow_unexpected_error(exc, state.get("metadata"))
+        err["trace_id"] = trace_id
+        err["status"] = "error"
+        return err
+
+
+def _workflow_http_error(
+    exc: httpx.HTTPStatusError, saved_metadata: Any
+) -> dict[str, Any]:
+    status = exc.response.status_code
+    try:
+        detail_body = exc.response.json()
+        message = detail_body.get("reason") or detail_body.get("error") or str(detail_body)[:200]
+    except Exception:
+        message = exc.response.text[:200]
+    logger.warning("TaskPlanner workflow HTTP %s: %s", status, message)
+    return {
+        "ok": False,
+        "toast_message": (
+            f"Cloudera workflow error (HTTP {status}). "
+            "Confirm WORKFLOW_BASE_URL and WORKFLOW_API_KEY are configured."
+        ),
+        "detail": f"gateway_http_{status}",
+        "gateway_message": message,
+        "metadata": saved_metadata,
+    }
+
+
+def _workflow_timeout_error(saved_metadata: Any) -> dict[str, Any]:
+    logger.warning("TaskPlanner workflow timeout after %.0fs", config.WORKFLOW_TIMEOUT_S)
+    return {
+        "ok": False,
+        "toast_message": (
+            f"Cloudera workflow timed out after {config.WORKFLOW_TIMEOUT_S:.0f}s. "
+            "Try again or check workflow deployment load."
+        ),
+        "detail": "gateway_timeout",
+        "metadata": saved_metadata,
+    }
+
+
+def _workflow_unreachable_error(exc: httpx.RequestError, saved_metadata: Any) -> dict[str, Any]:
+    logger.warning("TaskPlanner workflow unreachable: %s", exc)
+    return {
+        "ok": False,
+        "toast_message": (
+            "Cloudera workflow is unreachable. Verify WORKFLOW_BASE_URL and "
+            "network connectivity."
+        ),
+        "detail": "gateway_unreachable",
+        "metadata": saved_metadata,
+    }
+
+
+def _workflow_invalid_error(exc: ValueError, saved_metadata: Any) -> dict[str, Any]:
+    logger.warning("TaskPlanner workflow response invalid: %s", exc)
+    return {
+        "ok": False,
+        "toast_message": str(exc),
+        "detail": "gateway_invalid_response",
+        "metadata": saved_metadata,
+    }
+
+
+def _workflow_unexpected_error(exc: Exception, saved_metadata: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "toast_message": "Cloudera workflow encountered an unexpected error during dispatch.",
+        "detail": f"gateway_error:{type(exc).__name__}",
+        "metadata": saved_metadata,
+    }
+
+
+async def submit_planning_request(
+    body: DelegatePlanningRequest,
+    user_token: Optional[str],
+) -> dict[str, Any]:
+    """Blocking delegation for callers that want a single round-trip."""
+    started = await start_planning_request(body, user_token)
+    if not started.get("ok"):
+        return started
+    trace_id = started.get("trace_id")
+    if not trace_id:
+        return started
+
+    deadline = time.monotonic() + config.WORKFLOW_POLL_TIMEOUT_S
+    while time.monotonic() < deadline:
+        polled = await poll_planning_status(trace_id, user_token)
+        if polled.get("status") in {"completed", "timeout", "error"} or not polled.get("ok"):
+            return polled
+        await asyncio.sleep(config.WORKFLOW_POLL_INTERVAL_S)
+
+    return await poll_planning_status(trace_id, user_token)
+
+
 def _save_local_artifact(
     body: DelegatePlanningRequest,
     trace_id: str,
@@ -364,192 +735,3 @@ async def _kickoff_workflow(
     if not trace_id:
         raise ValueError("Workflow kickoff response missing trace_id.")
     return str(trace_id)
-
-
-async def submit_planning_request(
-    body: DelegatePlanningRequest,
-    user_token: Optional[str],
-) -> dict[str, Any]:
-    """Persist task metadata locally, then run the Cloudera workflow delegation flow."""
-    token, token_source = _resolve_workflow_token(user_token)
-    if not token:
-        return {
-            "ok": False,
-            "toast_message": (
-                "Cloudera authentication required. Set WORKFLOW_API_KEY / CDSW_APIV2_KEY "
-                "or CLOUDERA_AI_TOKEN on the backend, or sign in to Cloudera AI."
-            ),
-            "detail": "no_auth_token",
-        }
-
-    try:
-        saved_metadata = _persist_node_metadata(body)
-    except ValueError as exc:
-        return {
-            "ok": False,
-            "toast_message": str(exc),
-            "detail": "process_not_found",
-        }
-
-    kickoff_inputs = _build_kickoff_inputs(body)
-    logger.info(
-        "TaskPlanner workflow dispatch process=%s node=%s subtasks=%d base_url=%s",
-        body.process_instance_id,
-        body.target_node_id,
-        len(body.subtasks),
-        config.WORKFLOW_BASE_URL,
-    )
-    logger.debug("TaskPlanner kickoff inputs=%s", kickoff_inputs)
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=config.WORKFLOW_TIMEOUT_S,
-            verify=config.WORKFLOW_SSL_VERIFY,
-        ) as client:
-            session_id, session_directory = await _create_workflow_session(client, token)
-            trace_id = await _kickoff_workflow(client, token, body)
-            logger.info("Polling workflow events trace_id=%s", trace_id)
-            workflow_events, enriched_json, poll_completed = await _poll_workflow_until_complete(
-                client, token, trace_id
-            )
-
-            local_artifact_path: str | None = None
-            artifact_upload: dict[str, Any] | None = None
-            artifact_filename = f"{trace_id}_enriched.json"
-
-            if enriched_json is not None:
-                local_artifact_path = _save_local_artifact(body, trace_id, enriched_json)
-                artifact_bytes = Path(local_artifact_path).read_bytes()
-                try:
-                    artifact_upload = await _upload_enriched_artifact(
-                        client,
-                        token,
-                        session_id,
-                        artifact_filename,
-                        artifact_bytes,
-                    )
-                    logger.info(
-                        "Uploaded enriched artifact session_id=%s file_path=%s",
-                        session_id,
-                        artifact_upload.get("file_path"),
-                    )
-                except Exception as exc:
-                    logger.warning("Workflow artifact upload failed: %s", exc)
-                    artifact_upload = {
-                        "success": False,
-                        "message": str(exc),
-                    }
-
-        if not poll_completed:
-            return {
-                "ok": False,
-                "toast_message": (
-                    f"Workflow polling timed out after {config.WORKFLOW_POLL_TIMEOUT_S:.0f}s "
-                    f"for trace {trace_id}."
-                ),
-                "detail": "poll_timeout",
-                "metadata": saved_metadata,
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "workflow_events": workflow_events,
-                "enriched_json": enriched_json,
-                "local_artifact_path": local_artifact_path,
-                "artifact_upload": artifact_upload,
-            }
-
-        if enriched_json is None:
-            return {
-                "ok": False,
-                "toast_message": (
-                    "Workflow completed but no Enriched JSON Object was found in the event stream."
-                ),
-                "detail": "enriched_json_missing",
-                "metadata": saved_metadata,
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "workflow_events": workflow_events,
-                "local_artifact_path": local_artifact_path,
-                "artifact_upload": artifact_upload,
-            }
-
-        upload_path = (
-            artifact_upload.get("file_path") if isinstance(artifact_upload, dict) else None
-        )
-        toast = "Workflow completed."
-        if upload_path:
-            toast = f"Workflow completed. Artifact uploaded to {upload_path}."
-
-        return {
-            "ok": True,
-            "status": "completed",
-            "toast_message": toast,
-            "process_instance_id": body.process_instance_id,
-            "target_node_id": body.target_node_id,
-            "metadata": saved_metadata,
-            "workflow_base_url": config.WORKFLOW_BASE_URL,
-            "token_source": token_source,
-            "session_id": session_id,
-            "session_directory": session_directory,
-            "trace_id": trace_id,
-            "workflow_events": workflow_events,
-            "enriched_json": enriched_json,
-            "local_artifact_path": local_artifact_path,
-            "artifact_upload": artifact_upload,
-            "poll_completed": poll_completed,
-        }
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        try:
-            detail_body = exc.response.json()
-            message = detail_body.get("reason") or detail_body.get("error") or str(detail_body)[:200]
-        except Exception:
-            message = exc.response.text[:200]
-        logger.warning("TaskPlanner workflow HTTP %s: %s", status, message)
-        return {
-            "ok": False,
-            "toast_message": (
-                f"Cloudera workflow error (HTTP {status}). "
-                "Confirm WORKFLOW_BASE_URL and WORKFLOW_API_KEY are configured."
-            ),
-            "detail": f"gateway_http_{status}",
-            "gateway_message": message,
-            "metadata": saved_metadata,
-        }
-    except httpx.TimeoutException:
-        logger.warning("TaskPlanner workflow timeout after %.0fs", config.WORKFLOW_TIMEOUT_S)
-        return {
-            "ok": False,
-            "toast_message": (
-                f"Cloudera workflow timed out after {config.WORKFLOW_TIMEOUT_S:.0f}s. "
-                "Try again or check workflow deployment load."
-            ),
-            "detail": "gateway_timeout",
-            "metadata": saved_metadata,
-        }
-    except httpx.RequestError as exc:
-        logger.warning("TaskPlanner workflow unreachable: %s", exc)
-        return {
-            "ok": False,
-            "toast_message": (
-                "Cloudera workflow is unreachable. Verify WORKFLOW_BASE_URL and "
-                "network connectivity."
-            ),
-            "detail": "gateway_unreachable",
-            "metadata": saved_metadata,
-        }
-    except ValueError as exc:
-        logger.warning("TaskPlanner workflow response invalid: %s", exc)
-        return {
-            "ok": False,
-            "toast_message": str(exc),
-            "detail": "gateway_invalid_response",
-            "metadata": saved_metadata,
-        }
-    except Exception as exc:
-        logger.exception("TaskPlanner workflow dispatch failed")
-        return {
-            "ok": False,
-            "toast_message": "Cloudera workflow encountered an unexpected error during dispatch.",
-            "detail": f"gateway_error:{type(exc).__name__}",
-            "metadata": saved_metadata,
-        }
