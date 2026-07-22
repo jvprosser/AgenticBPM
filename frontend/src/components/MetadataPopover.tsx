@@ -75,14 +75,98 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatJsonBlock(value: unknown): string {
-  if (value === undefined || value === null) {
-    return "No data available.";
+function unescapeNewlines(text: string): string {
+  return text.replace(/\\n/g, "\n");
+}
+
+function tryParseJson(text: string): unknown | null {
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    return null;
+  }
+}
+
+function extractEnrichedJsonFromText(text: string): unknown | null {
+  const normalized = unescapeNewlines(text);
+
+  for (const match of normalized.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)) {
+    const parsed = tryParseJson(match[1]);
+    if (parsed !== null) return parsed;
+  }
+
+  const braceStart = normalized.indexOf("{");
+  const braceEnd = normalized.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    const parsed = tryParseJson(normalized.slice(braceStart, braceEnd + 1));
+    if (parsed !== null) return parsed;
+  }
+
+  return tryParseJson(normalized);
+}
+
+function findFinalResultText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFinalResultText(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const preferredKeys = [
+      "output",
+      "result",
+      "content",
+      "message",
+      "text",
+      "answer",
+      "final_answer",
+      "finalAnswer",
+      "data",
+      "payload",
+    ];
+    for (const key of preferredKeys) {
+      if (key in obj) {
+        const found = findFinalResultText(obj[key]);
+        if (found) return found;
+      }
+    }
+    for (const v of Object.values(obj)) {
+      if (typeof v === "string" && v.includes("Final Enriched JSON Object")) {
+        return v;
+      }
+    }
+    for (const v of Object.values(obj)) {
+      if (typeof v === "string" && (v.includes("```json") || v.includes("Final Answer"))) {
+        return v;
+      }
+    }
+  }
+  return null;
+}
+
+function formatDelegateFinalResult(value: unknown): string {
+  const text = findFinalResultText(value);
+  if (text) {
+    const parsed = extractEnrichedJsonFromText(text);
+    if (parsed !== null) {
+      return JSON.stringify(parsed, null, 2);
+    }
+    return unescapeNewlines(text);
   }
   if (typeof value === "string") {
-    return value;
+    const parsed = extractEnrichedJsonFromText(value);
+    if (parsed !== null) return JSON.stringify(parsed, null, 2);
+    return unescapeNewlines(value);
   }
-  return JSON.stringify(value, null, 2);
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value, null, 2);
+  }
+  return "No data available.";
 }
 
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
@@ -375,7 +459,7 @@ export default function MetadataPopover({
                 <>
                   <h3 className="delegate-dialog__events-title">Workflow Result</h3>
                   <pre className="delegate-dialog__events delegate-dialog__events--primary">
-                    {formatJsonBlock(delegateDialog.result.final_result)}
+                    {formatDelegateFinalResult(delegateDialog.result.final_result)}
                   </pre>
                 </>
               )}
