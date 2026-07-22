@@ -794,6 +794,11 @@ body {
   overflow: auto;
 }
 
+.delegate-dialog__events--primary {
+  border-color: rgba(46, 160, 67, 0.45);
+  max-height: 420px;
+}
+
 .delegate-dialog__footer {
   display: flex;
   justify-content: flex-end;

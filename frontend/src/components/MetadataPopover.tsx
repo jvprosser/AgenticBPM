@@ -46,6 +46,14 @@ interface DelegatePlanningResult {
   session_id?: string;
   session_directory?: string | null;
   workflow_events?: unknown[];
+  enriched_json?: unknown;
+  local_artifact_path?: string | null;
+  artifact_upload?: {
+    success?: boolean;
+    message?: string;
+    file_path?: string;
+  } | null;
+  poll_completed?: boolean;
   gateway_message?: string;
   detail?: string;
   metadata?: NodeTaskMetadata;
@@ -58,8 +66,18 @@ interface DelegateDialogState {
   result?: DelegatePlanningResult;
 }
 
+function formatJsonBlock(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "No data available.";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value, null, 2);
+}
+
 function formatDelegateEvents(events: unknown[] | undefined): string {
-  if (!events?.length) return "No workflow events were returned yet.";
+  if (!events?.length) return "No workflow events were returned.";
   return events
     .map((event) => (typeof event === "string" ? event : JSON.stringify(event, null, 2)))
     .join("\n\n");
@@ -236,8 +254,8 @@ export default function MetadataPopover({
       }
       setDelegateDialog({
         variant: "success",
-        title: "Delegation Started",
-        message: body.toast_message ?? "Task design submitted to Cloudera TaskPlanner.",
+        title: "Delegation Complete",
+        message: body.toast_message ?? "Workflow completed successfully.",
         result: body,
       });
     } catch (e) {
@@ -308,17 +326,31 @@ export default function MetadataPopover({
                       <dd>{delegateDialog.result.session_id}</dd>
                     </>
                   )}
-                  {delegateDialog.result.session_directory && (
+                  {delegateDialog.result.artifact_upload?.file_path && (
                     <>
-                      <dt>Session Directory</dt>
-                      <dd>{delegateDialog.result.session_directory}</dd>
+                      <dt>Artifact Path</dt>
+                      <dd>{delegateDialog.result.artifact_upload.file_path}</dd>
+                    </>
+                  )}
+                  {delegateDialog.result.local_artifact_path && (
+                    <>
+                      <dt>Local Artifact</dt>
+                      <dd>{delegateDialog.result.local_artifact_path}</dd>
                     </>
                   )}
                 </dl>
               )}
+              {delegateDialog.variant === "success" && delegateDialog.result?.enriched_json != null && (
+                <>
+                  <h3 className="delegate-dialog__events-title">Enriched JSON Object</h3>
+                  <pre className="delegate-dialog__events delegate-dialog__events--primary">
+                    {formatJsonBlock(delegateDialog.result.enriched_json)}
+                  </pre>
+                </>
+              )}
               {delegateDialog.variant === "success" && (
                 <>
-                  <h3 className="delegate-dialog__events-title">Workflow Events</h3>
+                  <h3 className="delegate-dialog__events-title">Workflow Events (Debug)</h3>
                   <pre className="delegate-dialog__events">
                     {formatDelegateEvents(delegateDialog.result?.workflow_events)}
                   </pre>
@@ -478,7 +510,7 @@ export default function MetadataPopover({
               disabled={delegateBusy}
               onClick={() => void handleDelegateToAI()}
             >
-              {delegateBusy ? "Delegating…" : "Delegate to AI"}
+              {delegateBusy ? "Polling workflow…" : "Delegate to AI"}
             </button>
           </section>
 

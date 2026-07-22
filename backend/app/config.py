@@ -52,14 +52,16 @@ WORKFLOW_BASE_URL = os.environ.get(
     "WORKFLOW_BASE_URL",
     "https://workflow-53a9472b-dbfa-415e-b14f-c8fa1c5bf31b.ml-dbfc64d1-783.go01-dem.ylcu-atmi.cloudera.site",
 )
-WORKFLOW_API_KEY = os.environ.get("WORKFLOW_API_KEY", "")
+WORKFLOW_API_KEY = os.environ.get("WORKFLOW_API_KEY") or os.environ.get("CDSW_APIV2_KEY", "")
 WORKFLOW_SSL_VERIFY = os.environ.get("WORKFLOW_SSL_VERIFY", "false").lower() in (
     "1",
     "true",
     "yes",
 )
-WORKFLOW_TIMEOUT_S = float(os.environ.get("WORKFLOW_TIMEOUT_S", "60"))
-WORKFLOW_EVENTS_PREVIEW_LIMIT = int(os.environ.get("WORKFLOW_EVENTS_PREVIEW_LIMIT", "25"))
+WORKFLOW_TIMEOUT_S = float(os.environ.get("WORKFLOW_TIMEOUT_S", "120"))
+WORKFLOW_POLL_INTERVAL_S = float(os.environ.get("WORKFLOW_POLL_INTERVAL_S", "2"))
+WORKFLOW_POLL_TIMEOUT_S = float(os.environ.get("WORKFLOW_POLL_TIMEOUT_S", "300"))
+ARTIFACT_DIR = DATA_DIR / "artifacts"
 WORKFLOW_DELEGATE_USER_INPUT = os.environ.get(
     "WORKFLOW_DELEGATE_USER_INPUT",
     (
@@ -77,3 +79,4 @@ _pm_proc = None
 
 def ensure_dirs() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
