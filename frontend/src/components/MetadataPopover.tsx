@@ -56,8 +56,12 @@ interface DelegatePlanningResult {
   trace_id?: string;
   session_id?: string;
   session_directory?: string | null;
+  agent_output?: unknown;
+  output?: unknown;
   final_result?: unknown;
   enriched_json?: unknown;
+  workflow_events?: unknown[];
+  events?: unknown[];
   local_artifact_path?: string | null;
   artifact_upload?: {
     success?: boolean;

@@ -187,6 +187,138 @@ def _extract_enriched_json(events: list[Any]) -> Any | None:
     return None
 
 
+_BLOCKED_AGENT_OUTPUT_KEYS = frozenset({"inputs", "input", "payload", "metadata", "context"})
+
+
+def _extract_json_from_markdown_text(text: str) -> Any | None:
+    import re
+
+    stripped = text.strip()
+    if not stripped:
+        return None
+    fenced_blocks = re.findall(r"```(?:json)?\s*\n?([\s\S]*?)```", stripped, flags=re.IGNORECASE)
+    for block in reversed(fenced_blocks):
+        try:
+            return json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+
+
+def _is_structured_text_object(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return bool(value.get("objective") or value.get("steps") or value.get("key_considerations"))
+
+
+def _source_has_catalog_metadata(source: Any) -> bool:
+    if not isinstance(source, dict):
+        return False
+    for key in (
+        "qualified_name",
+        "business_terms",
+        "classifications",
+        "asset_type",
+        "owner",
+        "description",
+        "destination",
+    ):
+        if source.get(key) not in (None, "", {}, []):
+            return True
+    return False
+
+
+def _looks_like_augmented_metadata(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if _is_structured_text_object(value.get("final_activity")):
+        return True
+    sources = value.get("data_sources") or value.get("subtasks")
+    if isinstance(sources, list):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            procedure = source.get("user_procedure") or source.get("human_procedure")
+            if _is_structured_text_object(procedure):
+                return True
+            if _source_has_catalog_metadata(source):
+                return True
+    return False
+
+
+def _extract_agent_output_from_value(value: Any, *, depth: int = 0) -> Any | None:
+    if value is None or depth > 8:
+        return None
+    if isinstance(value, str):
+        parsed = _extract_json_from_markdown_text(value)
+        if _looks_like_augmented_metadata(parsed):
+            return parsed
+        return None
+    if isinstance(value, dict):
+        if _looks_like_augmented_metadata(value):
+            return value
+        preferred_keys = (
+            "agent_output",
+            "enriched_json",
+            "enrichedJson",
+            "output",
+            "result",
+            "content",
+            "message",
+            "data",
+            "answer",
+            "final_answer",
+            "finalAnswer",
+            "final_result",
+        )
+        for key in preferred_keys:
+            if key not in value:
+                continue
+            found = _extract_agent_output_from_value(value.get(key), depth=depth + 1)
+            if found is not None:
+                return found
+        for key, nested in value.items():
+            if key in _BLOCKED_AGENT_OUTPUT_KEYS:
+                continue
+            found = _extract_agent_output_from_value(nested, depth=depth + 1)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list):
+        for item in reversed(value):
+            found = _extract_agent_output_from_value(item, depth=depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _extract_agent_output(events: list[Any]) -> Any | None:
+    """Return the TaskPlanner agent's augmented metadata payload from workflow events."""
+    completed = _find_crew_kickoff_completed(events)
+    if completed:
+        found = _extract_agent_output_from_value(completed)
+        if found is not None:
+            return found
+    for event in reversed(events):
+        found = _extract_agent_output_from_value(event)
+        if found is not None:
+            return found
+    legacy = _extract_enriched_json(events)
+    if _looks_like_augmented_metadata(legacy):
+        return legacy
+    return None
+
+
 def _find_crew_kickoff_completed(events: list[Any]) -> dict[str, Any] | None:
     for event in reversed(events):
         if isinstance(event, dict) and event.get("type") == _CREW_KICKOFF_COMPLETED_TYPE:
@@ -298,7 +430,7 @@ async def _poll_workflow_until_complete(
             seen.add(fingerprint)
             all_events.append(event)
 
-        enriched = _extract_enriched_json(all_events)
+        enriched = _extract_agent_output(all_events)
         if _workflow_completed(all_events):
             logger.info(
                 "Workflow poll complete trace_id=%s events=%d enriched=%s",
@@ -316,7 +448,7 @@ async def _poll_workflow_until_complete(
         config.WORKFLOW_POLL_TIMEOUT_S,
         len(all_events),
     )
-    return all_events, _extract_enriched_json(all_events), False
+    return all_events, _extract_agent_output(all_events), False
 
 
 def _merge_event_batch(state: dict[str, Any], batch: list[Any]) -> None:
@@ -343,6 +475,7 @@ def _build_completed_response(state: dict[str, Any], token_source: str) -> dict[
         toast = f"Workflow completed. Artifact uploaded to {upload_path}."
 
     final_result = state.get("final_result")
+    agent_output = state.get("agent_output") or enriched_json
     return {
         "ok": True,
         "status": "completed",
@@ -356,7 +489,10 @@ def _build_completed_response(state: dict[str, Any], token_source: str) -> dict[
         "session_directory": state.get("session_directory"),
         "trace_id": state["trace_id"],
         "final_result": final_result,
-        "enriched_json": enriched_json,
+        "agent_output": agent_output,
+        "output": agent_output,
+        "enriched_json": agent_output,
+        "workflow_events": state.get("events"),
         "local_artifact_path": state.get("local_artifact_path"),
         "artifact_upload": artifact_upload,
         "poll_completed": True,
@@ -372,14 +508,15 @@ async def _finalize_completed_session(
     body = DelegatePlanningRequest.model_validate(state["body"])
     trace_id = state["trace_id"]
     state["final_result"] = _find_crew_kickoff_completed(state["events"])
-    enriched_json = _extract_enriched_json(state["events"])
-    state["enriched_json"] = enriched_json
+    agent_output = _extract_agent_output(state["events"])
+    state["agent_output"] = agent_output
+    state["enriched_json"] = agent_output
     state["completed"] = True
 
-    if enriched_json is None:
+    if agent_output is None:
         return
 
-    local_artifact_path = _save_local_artifact(body, trace_id, enriched_json)
+    local_artifact_path = _save_local_artifact(body, trace_id, agent_output)
     state["local_artifact_path"] = local_artifact_path
     artifact_filename = f"{trace_id}_enriched.json"
     try:
@@ -545,8 +682,8 @@ async def poll_planning_status(
             if _workflow_completed(state["events"]):
                 await _finalize_completed_session(client, token, state)
                 final_result = state.get("final_result")
-                enriched_json = state.get("enriched_json")
-                if final_result is None and enriched_json is None:
+                agent_output = state.get("agent_output")
+                if final_result is None and agent_output is None:
                     return {
                         "ok": False,
                         "status": "completed",

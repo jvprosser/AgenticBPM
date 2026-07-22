@@ -38,6 +38,39 @@ export interface AIDelegationPayload {
   subtasks?: AugmentedDataSource[];
 }
 
+export interface DelegationPollResult {
+  enriched_json?: unknown;
+  agent_output?: unknown;
+  output?: unknown;
+  final_result?: unknown;
+  workflow_events?: unknown[];
+  events?: unknown[];
+  metadata?: unknown;
+}
+
+const BLOCKED_NESTED_KEYS = new Set([
+  "inputs",
+  "input",
+  "payload",
+  "metadata",
+  "context",
+]);
+
+const AGENT_OUTPUT_NESTED_KEYS = [
+  "agent_output",
+  "enriched_json",
+  "enrichedJson",
+  "output",
+  "result",
+  "content",
+  "message",
+  "data",
+  "answer",
+  "final_answer",
+  "finalAnswer",
+  "final_result",
+];
+
 function unescapeNewlines(text: string): string {
   return text.replace(/\\n/g, "\n");
 }
@@ -50,7 +83,7 @@ function tryParseJson(text: string): unknown | null {
   }
 }
 
-function extractJsonFromText(text: string): unknown | null {
+export function extractJsonFromText(text: string): unknown | null {
   const normalized = unescapeNewlines(text);
 
   for (const match of normalized.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)) {
@@ -68,7 +101,7 @@ function extractJsonFromText(text: string): unknown | null {
   return tryParseJson(normalized);
 }
 
-function isStructuredTextObject(value: unknown): value is StructuredTextObject {
+export function isStructuredTextObject(value: unknown): value is StructuredTextObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const obj = value as StructuredTextObject;
   return Boolean(obj.objective || obj.steps?.length || obj.key_considerations?.length);
@@ -123,6 +156,112 @@ export function hasCatalogMetadata(
   );
 }
 
+function coercePayload(value: unknown): AIDelegationPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  const sources = obj.data_sources ?? obj.subtasks;
+  if (
+    obj.input_parameter !== undefined ||
+    obj.final_activity !== undefined ||
+    obj.finalized_artifact !== undefined ||
+    obj.output_end_product !== undefined ||
+    obj.user_validation_required !== undefined ||
+    Array.isArray(sources)
+  ) {
+    return obj as AIDelegationPayload;
+  }
+  return null;
+}
+
+export function isAugmentedPayload(value: unknown): value is AIDelegationPayload {
+  const payload = coercePayload(value);
+  if (!payload) return false;
+
+  if (isStructuredTextObject(payload.final_activity)) return true;
+
+  const sources = payload.data_sources ?? payload.subtasks ?? [];
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    const procedure = source.user_procedure ?? source.human_procedure;
+    if (isStructuredTextObject(procedure)) return true;
+    if (hasCatalogMetadata(source)) return true;
+  }
+
+  return false;
+}
+
+function resolveCandidate(candidate: unknown, depth = 0): AIDelegationPayload | null {
+  if (candidate === undefined || candidate === null || depth > 8) return null;
+
+  if (typeof candidate === "string") {
+    const parsed = extractJsonFromText(candidate);
+    return resolveCandidate(parsed, depth + 1);
+  }
+
+  const direct = coercePayload(candidate);
+  if (direct && isAugmentedPayload(direct)) return direct;
+
+  if (typeof candidate !== "object") return null;
+  if (Array.isArray(candidate)) {
+    for (let index = candidate.length - 1; index >= 0; index -= 1) {
+      const nested = resolveCandidate(candidate[index], depth + 1);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  const obj = candidate as Record<string, unknown>;
+  for (const key of AGENT_OUTPUT_NESTED_KEYS) {
+    if (!(key in obj)) continue;
+    const nested = resolveCandidate(obj[key], depth + 1);
+    if (nested) return nested;
+  }
+
+  for (const [key, nested] of Object.entries(obj)) {
+    if (BLOCKED_NESTED_KEYS.has(key)) continue;
+    const resolved = resolveCandidate(nested, depth + 1);
+    if (resolved) return resolved;
+  }
+
+  return null;
+}
+
+function extractFromEventStream(events: unknown[]): AIDelegationPayload | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const resolved = resolveCandidate(events[index]);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+export function parseAugmentedPayload(rawResponse: DelegationPollResult): AIDelegationPayload | null {
+  const topLevelCandidates = [
+    rawResponse.agent_output,
+    rawResponse.enriched_json,
+    rawResponse.output,
+    rawResponse.final_result,
+  ];
+
+  for (const candidate of topLevelCandidates) {
+    const augmented = resolveCandidate(candidate);
+    if (augmented) {
+      console.log("🤖 [DELEGATION RESULT] Agent Output Payload:", augmented);
+      return augmented;
+    }
+  }
+
+  const eventStream = rawResponse.workflow_events ?? rawResponse.events;
+  if (Array.isArray(eventStream)) {
+    const fromEvents = extractFromEventStream(eventStream);
+    if (fromEvents) {
+      console.log("🤖 [DELEGATION RESULT] Agent Output Payload:", fromEvents);
+      return fromEvents;
+    }
+  }
+
+  return null;
+}
+
 function normalizeAugmentedSource(source: AugmentedDataSource): DataSourceProcedure {
   const procedureRaw = source.user_procedure ?? source.human_procedure;
   const executionMode =
@@ -161,71 +300,4 @@ export function payloadToNodeMetadata(payload: AIDelegationPayload): NodeTaskMet
     user_validation_required: Boolean(payload.user_validation_required),
     data_sources,
   };
-}
-
-function coercePayload(value: unknown): AIDelegationPayload | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const obj = value as Record<string, unknown>;
-  const sources = obj.data_sources ?? obj.subtasks;
-  if (
-    obj.input_parameter !== undefined ||
-    obj.final_activity !== undefined ||
-    obj.finalized_artifact !== undefined ||
-    obj.output_end_product !== undefined ||
-    Array.isArray(sources)
-  ) {
-    return obj as AIDelegationPayload;
-  }
-  return null;
-}
-
-function findNestedPayload(value: unknown): AIDelegationPayload | null {
-  const direct = coercePayload(value);
-  if (direct) return direct;
-
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  const nestedKeys = [
-    "enriched_json",
-    "enrichedJson",
-    "metadata",
-    "payload",
-    "result",
-    "output",
-    "data",
-  ];
-  for (const key of nestedKeys) {
-    if (key in obj) {
-      const nested = findNestedPayload(obj[key]);
-      if (nested) return nested;
-    }
-  }
-
-  if (typeof obj.content === "string" || typeof obj.message === "string") {
-    const text = (obj.content ?? obj.message) as string;
-    const parsed = extractJsonFromText(text);
-    const fromText = coercePayload(parsed);
-    if (fromText) return fromText;
-  }
-
-  return null;
-}
-
-export function parseAugmentedPayload(result: {
-  enriched_json?: unknown;
-  final_result?: unknown;
-  metadata?: unknown;
-}): AIDelegationPayload | null {
-  const candidates = [result.enriched_json, result.final_result, result.metadata];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string") {
-      const parsed = extractJsonFromText(candidate);
-      const payload = findNestedPayload(parsed);
-      if (payload) return payload;
-      continue;
-    }
-    const payload = findNestedPayload(candidate);
-    if (payload) return payload;
-  }
-  return null;
 }
