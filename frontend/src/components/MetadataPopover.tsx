@@ -46,7 +46,7 @@ interface DelegatePlanningResult {
   trace_id?: string;
   session_id?: string;
   session_directory?: string | null;
-  workflow_events?: unknown[];
+  final_result?: unknown;
   enriched_json?: unknown;
   local_artifact_path?: string | null;
   artifact_upload?: {
@@ -83,13 +83,6 @@ function formatJsonBlock(value: unknown): string {
     return value;
   }
   return JSON.stringify(value, null, 2);
-}
-
-function formatDelegateEvents(events: unknown[] | undefined): string {
-  if (!events?.length) return "No workflow events were returned.";
-  return events
-    .map((event) => (typeof event === "string" ? event : JSON.stringify(event, null, 2)))
-    .join("\n\n");
 }
 
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
@@ -267,16 +260,11 @@ export default function MetadataPopover({
         return;
       }
 
-      const showRunningDialog = (body: DelegatePlanningResult) => {
-        setDelegateDialog({
-          variant: "running",
-          title: "Workflow Running",
-          message: body.toast_message ?? "Polling workflow events…",
-          result: body,
-        });
-      };
-
-      showRunningDialog(started);
+      setDelegateDialog({
+        variant: "running",
+        title: "Workflow Running",
+        message: started.toast_message ?? "Waiting for crew_kickoff_completed…",
+      });
 
       const deadline = Date.now() + DELEGATE_POLL_TIMEOUT_MS;
       let finalResult: DelegatePlanningResult = started;
@@ -291,7 +279,6 @@ export default function MetadataPopover({
         finalResult = polled;
 
         if (polled.status === "running" && polled.ok !== false) {
-          showRunningDialog(polled);
           continue;
         }
 
@@ -384,58 +371,11 @@ export default function MetadataPopover({
               {delegateDialog.result?.gateway_message && (
                 <p className="delegate-dialog__detail">{delegateDialog.result.gateway_message}</p>
               )}
-              {(delegateDialog.variant === "success" || delegateDialog.variant === "running") &&
-                delegateDialog.result && (
-                <dl className="delegate-dialog__meta">
-                  {delegateDialog.result.trace_id && (
-                    <>
-                      <dt>Trace ID</dt>
-                      <dd>{delegateDialog.result.trace_id}</dd>
-                    </>
-                  )}
-                  {delegateDialog.result.session_id && (
-                    <>
-                      <dt>Session ID</dt>
-                      <dd>{delegateDialog.result.session_id}</dd>
-                    </>
-                  )}
-                  {delegateDialog.result.poll_count != null && (
-                    <>
-                      <dt>Poll count</dt>
-                      <dd>{delegateDialog.result.poll_count}</dd>
-                    </>
-                  )}
-                  {delegateDialog.variant === "success" && delegateDialog.result.artifact_upload?.file_path && (
-                    <>
-                      <dt>Artifact Path</dt>
-                      <dd>{delegateDialog.result.artifact_upload.file_path}</dd>
-                    </>
-                  )}
-                  {delegateDialog.variant === "success" && delegateDialog.result.local_artifact_path && (
-                    <>
-                      <dt>Local Artifact</dt>
-                      <dd>{delegateDialog.result.local_artifact_path}</dd>
-                    </>
-                  )}
-                </dl>
-              )}
-              {delegateDialog.variant === "success" && delegateDialog.result?.enriched_json != null && (
+              {delegateDialog.variant === "success" && delegateDialog.result?.final_result != null && (
                 <>
-                  <h3 className="delegate-dialog__events-title">Enriched JSON Object</h3>
+                  <h3 className="delegate-dialog__events-title">Workflow Result</h3>
                   <pre className="delegate-dialog__events delegate-dialog__events--primary">
-                    {formatJsonBlock(delegateDialog.result.enriched_json)}
-                  </pre>
-                </>
-              )}
-              {(delegateDialog.variant === "success" || delegateDialog.variant === "running") && (
-                <>
-                  <h3 className="delegate-dialog__events-title">
-                    {delegateDialog.variant === "running"
-                      ? "Workflow Events (live)"
-                      : "Workflow Events (Debug)"}
-                  </h3>
-                  <pre className="delegate-dialog__events">
-                    {formatDelegateEvents(delegateDialog.result?.workflow_events)}
+                    {formatJsonBlock(delegateDialog.result.final_result)}
                   </pre>
                 </>
               )}

@@ -25,6 +25,7 @@ _FILE_UPLOAD_PATH = "/api/file/upload"
 _COMPLETION_STATUSES = frozenset(
     {"complete", "completed", "done", "finished", "success", "succeeded"}
 )
+_CREW_KICKOFF_COMPLETED_TYPE = "crew_kickoff_completed"
 _ENRICHED_KEYS = (
     "enriched_json",
     "enrichedJson",
@@ -157,6 +158,13 @@ def _extract_enriched_json(events: list[Any]) -> Any | None:
     return None
 
 
+def _find_crew_kickoff_completed(events: list[Any]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if isinstance(event, dict) and event.get("type") == _CREW_KICKOFF_COMPLETED_TYPE:
+            return event
+    return None
+
+
 def _event_signals_completion(event: Any) -> bool:
     if not isinstance(event, dict):
         return False
@@ -174,11 +182,7 @@ def _event_signals_completion(event: Any) -> bool:
 
 
 def _workflow_completed(events: list[Any]) -> bool:
-    if not events:
-        return False
-    if _extract_enriched_json(events) is not None:
-        return True
-    return any(_event_signals_completion(event) for event in events)
+    return _find_crew_kickoff_completed(events) is not None
 
 
 def _parse_event_line(line: str) -> Any | None:
@@ -309,6 +313,7 @@ def _build_completed_response(state: dict[str, Any], token_source: str) -> dict[
     if upload_path:
         toast = f"Workflow completed. Artifact uploaded to {upload_path}."
 
+    final_result = state.get("final_result")
     return {
         "ok": True,
         "status": "completed",
@@ -321,7 +326,7 @@ def _build_completed_response(state: dict[str, Any], token_source: str) -> dict[
         "session_id": state["session_id"],
         "session_directory": state.get("session_directory"),
         "trace_id": state["trace_id"],
-        "workflow_events": state["events"],
+        "final_result": final_result,
         "enriched_json": enriched_json,
         "local_artifact_path": state.get("local_artifact_path"),
         "artifact_upload": artifact_upload,
@@ -337,6 +342,7 @@ async def _finalize_completed_session(
 ) -> None:
     body = DelegatePlanningRequest.model_validate(state["body"])
     trace_id = state["trace_id"]
+    state["final_result"] = _find_crew_kickoff_completed(state["events"])
     enriched_json = _extract_enriched_json(state["events"])
     state["enriched_json"] = enriched_json
     state["completed"] = True
@@ -432,7 +438,6 @@ async def start_planning_request(
             "session_id": session_id,
             "session_directory": session_directory,
             "trace_id": trace_id,
-            "workflow_events": [],
             "poll_completed": False,
         }
     except httpx.HTTPStatusError as exc:
@@ -510,18 +515,18 @@ async def poll_planning_status(
 
             if _workflow_completed(state["events"]):
                 await _finalize_completed_session(client, token, state)
+                final_result = state.get("final_result")
                 enriched_json = state.get("enriched_json")
-                if enriched_json is None:
+                if final_result is None and enriched_json is None:
                     return {
                         "ok": False,
                         "status": "completed",
                         "toast_message": (
-                            "Workflow completed but no Enriched JSON Object was found."
+                            "Workflow completed but no crew_kickoff_completed event was found."
                         ),
-                        "detail": "enriched_json_missing",
+                        "detail": "final_result_missing",
                         "trace_id": trace_id,
                         "session_id": state["session_id"],
-                        "workflow_events": state["events"],
                         "poll_completed": True,
                         "poll_count": state["poll_count"],
                     }
@@ -530,10 +535,9 @@ async def poll_planning_status(
             return {
                 "ok": True,
                 "status": "running",
-                "toast_message": f"Polling workflow events ({len(state['events'])} received)…",
+                "toast_message": "Waiting for workflow to complete…",
                 "trace_id": trace_id,
                 "session_id": state["session_id"],
-                "workflow_events": state["events"],
                 "poll_completed": False,
                 "poll_count": state["poll_count"],
             }
