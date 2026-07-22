@@ -169,17 +169,27 @@ function formatDelegateFinalResult(value: unknown): string {
   return "No data available.";
 }
 
+function normalizeDataSource(row: DataSourceProcedure & { human_procedure?: string }): DataSourceProcedure {
+  return {
+    source_name: row.source_name ?? "",
+    user_procedure: row.user_procedure ?? row.human_procedure ?? "",
+    data_destinations: row.data_destinations ?? "",
+    is_intermediate: row.is_intermediate ?? false,
+    qualified_name: row.qualified_name ?? "",
+    destination: row.destination ?? "",
+  };
+}
+
 function normalizeNodeInitial(initial: NodeTaskMetadata | GroupMetadataRecord): NodeTaskMetadata {
   if (isNodeTaskMetadata(initial)) {
     return {
-      data_sources: initial.data_sources.map((row) => ({
-        source_name: row.source_name ?? "",
-        human_procedure: row.human_procedure ?? "",
-        data_destinations: row.data_destinations ?? "",
-        is_intermediate: row.is_intermediate ?? false,
-      })),
+      input_parameter: initial.input_parameter ?? "",
+      data_sources: initial.data_sources.map((row) =>
+        normalizeDataSource(row as DataSourceProcedure & { human_procedure?: string })
+      ),
       output_end_product: initial.output_end_product ?? "",
       final_activity: initial.final_activity ?? "",
+      user_validation_required: initial.user_validation_required ?? false,
     };
   }
   return { ...EMPTY_NODE_TASK_METADATA };
@@ -283,7 +293,7 @@ export default function MetadataPopover({
           ...prev.data_sources,
           {
             source_name: "",
-            human_procedure: "",
+            user_procedure: "",
             data_destinations: "",
             is_intermediate: false,
           },
@@ -317,8 +327,10 @@ export default function MetadataPopover({
         body: JSON.stringify({
           process_instance_id: processId,
           target_node_id: target.ownerId,
+          input_parameter: latestNode.current.input_parameter,
           final_activity: latestNode.current.final_activity,
           finalized_artifact: latestNode.current.output_end_product,
+          user_validation_required: latestNode.current.user_validation_required,
           subtasks: latestNode.current.data_sources,
         }),
       });
@@ -508,93 +520,128 @@ export default function MetadataPopover({
             </button>
           </div>
           <p className="metadata-popover__hint">
-            Break down inbound data sources, human verification routines, and outputs. Changes
+            Break down inbound data sources, user verification routines, and outputs. Changes
             save automatically.
           </p>
 
           <section className="metadata-section">
-            <h4 className="metadata-section__title">
-              Data Sources &amp; Procedures (Inputs)
-            </h4>
-            {nodeForm.data_sources.length === 0 ? (
-              <p className="metadata-section__empty">No data sources yet. Add one below.</p>
-            ) : (
-              <ul className="metadata-source-list">
-                {nodeForm.data_sources.map((row, index) => (
-                  <li key={index} className="metadata-source-row">
-                    <div className="metadata-source-row__grid">
-                      <div className="metadata-source-row__col-left">
-                        <label className="metadata-field">
-                          <span>Source Name</span>
-                          <input
-                            type="text"
-                            value={row.source_name}
-                            placeholder="e.g. legacy billing DB"
-                            onChange={(e) =>
-                              updateSourceRow(index, "source_name", e.target.value)
-                            }
-                          />
-                        </label>
-                        <label className="metadata-field">
-                          <span>Data Destinations</span>
-                          <input
-                            type="text"
-                            value={row.data_destinations}
-                            placeholder="e.g., Claims Core Database"
-                            onChange={(e) =>
-                              updateSourceRow(index, "data_destinations", e.target.value)
-                            }
-                          />
-                        </label>
-                        <label className="metadata-field metadata-field--checkbox">
-                          <input
-                            type="checkbox"
-                            checked={row.is_intermediate}
-                            onChange={(e) =>
-                              updateSourceRow(index, "is_intermediate", e.target.checked)
-                            }
-                          />
-                          <span>Intermediate:</span>
-                        </label>
+            <label className="metadata-field">
+              <span>Primary Input Parameter (e.g. Claim ID, Policy Number, File Path):</span>
+              <input
+                type="text"
+                value={nodeForm.input_parameter}
+                placeholder="e.g., claim_id"
+                onChange={(e) =>
+                  updateNodeForm((prev) => ({
+                    ...prev,
+                    input_parameter: e.target.value,
+                  }))
+                }
+              />
+            </label>
+          </section>
+
+          <section className="metadata-section">
+            <h4 className="metadata-section__title">Inbound Data Sources</h4>
+            <div className="metadata-source-scroll">
+              {nodeForm.data_sources.length === 0 ? (
+                <p className="metadata-section__empty">No data sources yet. Add one below.</p>
+              ) : (
+                <ul className="metadata-source-list">
+                  {nodeForm.data_sources.map((row, index) => (
+                    <li key={index} className="metadata-source-row">
+                      <div className="metadata-source-row__grid">
+                        <div className="metadata-source-row__col-left">
+                          <label className="metadata-field">
+                            <span>Source Name</span>
+                            <input
+                              type="text"
+                              value={row.source_name}
+                              placeholder="e.g. legacy billing DB"
+                              onChange={(e) =>
+                                updateSourceRow(index, "source_name", e.target.value)
+                              }
+                            />
+                          </label>
+                          <label className="metadata-field">
+                            <span>Data Destinations</span>
+                            <input
+                              type="text"
+                              value={row.data_destinations}
+                              placeholder="e.g., Claims Core Database"
+                              onChange={(e) =>
+                                updateSourceRow(index, "data_destinations", e.target.value)
+                              }
+                            />
+                          </label>
+                          {row.qualified_name ? (
+                            <div className="metadata-enriched-block">
+                              <span className="metadata-enriched-block__label">Qualified Location:</span>
+                              <code className="metadata-enriched-block__value">
+                                {row.qualified_name}
+                              </code>
+                            </div>
+                          ) : null}
+                          {row.destination ? (
+                            <div className="metadata-enriched-block">
+                              <span className="metadata-enriched-block__label">
+                                Platform Destination Status:
+                              </span>
+                              <code className="metadata-enriched-block__value">
+                                {row.destination}
+                              </code>
+                            </div>
+                          ) : null}
+                          <label className="metadata-field metadata-field--checkbox">
+                            <input
+                              type="checkbox"
+                              checked={row.is_intermediate}
+                              onChange={(e) =>
+                                updateSourceRow(index, "is_intermediate", e.target.checked)
+                              }
+                            />
+                            <span>Intermediate:</span>
+                          </label>
+                        </div>
+                        <div className="metadata-source-row__col-right">
+                          <label className="metadata-field metadata-field--stretch">
+                            <span>User Procedure</span>
+                            <textarea
+                              rows={6}
+                              value={row.user_procedure}
+                              placeholder="Describe the steps you perform on this data."
+                              onChange={(e) =>
+                                updateSourceRow(index, "user_procedure", e.target.value)
+                              }
+                            />
+                          </label>
+                        </div>
                       </div>
-                      <div className="metadata-source-row__col-right">
-                        <label className="metadata-field metadata-field--stretch">
-                          <span>Human Procedure</span>
-                          <textarea
-                            rows={6}
-                            value={row.human_procedure}
-                            placeholder="Describe the steps you perform on this data."
-                            onChange={(e) =>
-                              updateSourceRow(index, "human_procedure", e.target.value)
-                            }
-                          />
-                        </label>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn--sm btn--row-remove"
-                      onClick={() => removeSourceRow(index)}
-                    >
-                      Remove source
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <button type="button" className="btn btn--sm metadata-source-add" onClick={addSourceRow}>
-              + Add data source
-            </button>
+                      <button
+                        type="button"
+                        className="btn btn--sm btn--row-remove"
+                        onClick={() => removeSourceRow(index)}
+                      >
+                        Remove source
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button type="button" className="btn btn--sm metadata-source-add" onClick={addSourceRow}>
+                + Add Data Source
+              </button>
+            </div>
           </section>
 
           <section className="metadata-section">
             <h4 className="metadata-section__title">Execution &amp; Outputs</h4>
             <label className="metadata-field">
-              <span>Final Activity (Human Verification Routine):</span>
+              <span>Final Activity (User Verification Routine):</span>
               <textarea
                 rows={3}
                 value={nodeForm.final_activity}
-                placeholder="Describe the human verification steps performed before handoff."
+                placeholder="Describe the user verification steps performed before handoff."
                 onChange={(e) =>
                   updateNodeForm((prev) => ({
                     ...prev,
@@ -616,6 +663,19 @@ export default function MetadataPopover({
                   }))
                 }
               />
+            </label>
+            <label className="metadata-field metadata-field--checkbox">
+              <input
+                type="checkbox"
+                checked={nodeForm.user_validation_required}
+                onChange={(e) =>
+                  updateNodeForm((prev) => ({
+                    ...prev,
+                    user_validation_required: e.target.checked,
+                  }))
+                }
+              />
+              <span>User Validation Required</span>
             </label>
             <button
               type="button"

@@ -35,15 +35,19 @@ export interface UploadResult {
 
 export interface DataSourceProcedure {
   source_name: string;
-  human_procedure: string;
+  user_procedure: string;
   data_destinations: string;
   is_intermediate: boolean;
+  qualified_name?: string;
+  destination?: string;
 }
 
 export interface NodeTaskMetadata {
+  input_parameter: string;
   data_sources: DataSourceProcedure[];
   output_end_product: string;
   final_activity: string;
+  user_validation_required: boolean;
 }
 
 export interface GroupMetadataRecord {
@@ -53,9 +57,11 @@ export interface GroupMetadataRecord {
 }
 
 export const EMPTY_NODE_TASK_METADATA: NodeTaskMetadata = {
+  input_parameter: "",
   data_sources: [],
   output_end_product: "",
   final_activity: "",
+  user_validation_required: false,
 };
 
 export const EMPTY_GROUP_METADATA: GroupMetadataRecord = {

@@ -149,7 +149,7 @@ def aggregate_group_pipeline(
             if not isinstance(entry, dict):
                 continue
             source_name = str(entry.get("source_name") or "").strip()
-            procedure = str(entry.get("human_procedure") or "").strip()
+            procedure = str(entry.get("user_procedure") or entry.get("human_procedure") or "").strip()
             if not source_name and not procedure:
                 continue
             key = source_name or "(unnamed source)"

@@ -4,16 +4,39 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _coerce_procedure_source(item: dict[str, Any]) -> dict[str, Any]:
+    """Accept legacy ``human_procedure`` payloads; persist ``user_procedure``."""
+    if not item.get("user_procedure") and item.get("human_procedure"):
+        item = {**item, "user_procedure": item["human_procedure"]}
+    return item
 
 
 class DataSourceProcedure(BaseModel):
     source_name: str = ""
-    human_procedure: str = ""
+    user_procedure: str = ""
     data_destinations: Optional[str] = ""
     is_intermediate: Optional[bool] = False
+    qualified_name: Optional[str] = ""
+    destination: Optional[str] = ""
 
-    @field_validator("source_name", "human_procedure", "data_destinations", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return _coerce_procedure_source(data)
+        return data
+
+    @field_validator(
+        "source_name",
+        "user_procedure",
+        "data_destinations",
+        "qualified_name",
+        "destination",
+        mode="before",
+    )
     @classmethod
     def coerce_text(cls, value: Any) -> str:
         if value is None:
@@ -29,16 +52,25 @@ class DataSourceProcedure(BaseModel):
 
 
 class NodeTaskMetadata(BaseModel):
+    input_parameter: Optional[str] = ""
     data_sources: list[DataSourceProcedure] = Field(default_factory=list)
     output_end_product: Optional[str] = ""
     final_activity: Optional[str] = ""
+    user_validation_required: Optional[bool] = False
 
-    @field_validator("output_end_product", "final_activity", mode="before")
+    @field_validator("input_parameter", "output_end_product", "final_activity", mode="before")
     @classmethod
     def coerce_text_fields(cls, value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip()
+
+    @field_validator("user_validation_required", mode="before")
+    @classmethod
+    def coerce_validation_flag(cls, value: Any) -> bool:
+        if value is None:
+            return False
+        return bool(value)
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "NodeTaskMetadata":
@@ -48,17 +80,22 @@ class NodeTaskMetadata(BaseModel):
             for item in raw_sources:
                 if not isinstance(item, dict):
                     continue
-                entry = DataSourceProcedure.model_validate(item)
+                normalized = _coerce_procedure_source(item)
+                entry = DataSourceProcedure.model_validate(normalized)
                 if (
                     entry.source_name
-                    or entry.human_procedure
+                    or entry.user_procedure
                     or entry.data_destinations
+                    or entry.qualified_name
+                    or entry.destination
                 ):
                     sources.append(entry)
         return cls(
+            input_parameter=data.get("input_parameter"),
             data_sources=sources,
             output_end_product=data.get("output_end_product"),
             final_activity=data.get("final_activity"),
+            user_validation_required=data.get("user_validation_required"),
         )
 
 

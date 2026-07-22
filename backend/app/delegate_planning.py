@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import config, db, discovery, ingestion, metadata as metadata_svc
 
@@ -40,11 +40,27 @@ _poll_sessions: dict[str, dict[str, Any]] = {}
 
 class SubtaskRow(BaseModel):
     source_name: str = ""
-    human_procedure: str = ""
+    user_procedure: str = ""
     data_destinations: Optional[str] = ""
     is_intermediate: Optional[bool] = False
+    qualified_name: Optional[str] = ""
+    destination: Optional[str] = ""
 
-    @field_validator("source_name", "human_procedure", "data_destinations", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not data.get("user_procedure") and data.get("human_procedure"):
+            data = {**data, "user_procedure": data["human_procedure"]}
+        return data
+
+    @field_validator(
+        "source_name",
+        "user_procedure",
+        "data_destinations",
+        "qualified_name",
+        "destination",
+        mode="before",
+    )
     @classmethod
     def coerce_text(cls, value: Any) -> str:
         if value is None:
@@ -62,16 +78,25 @@ class SubtaskRow(BaseModel):
 class DelegatePlanningRequest(BaseModel):
     process_instance_id: str
     target_node_id: str
+    input_parameter: str = ""
     final_activity: str = ""
     finalized_artifact: str = ""
+    user_validation_required: bool = False
     subtasks: list[SubtaskRow] = Field(default_factory=list)
 
-    @field_validator("final_activity", "finalized_artifact", mode="before")
+    @field_validator("input_parameter", "final_activity", "finalized_artifact", mode="before")
     @classmethod
     def coerce_text_fields(cls, value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip()
+
+    @field_validator("user_validation_required", mode="before")
+    @classmethod
+    def coerce_validation_flag(cls, value: Any) -> bool:
+        if value is None:
+            return False
+        return bool(value)
 
 
 def _resolve_workflow_token(user_token: Optional[str]) -> tuple[Optional[str], str]:
@@ -96,8 +121,10 @@ def _metadata_context(body: DelegatePlanningRequest) -> str:
     metadata_object = {
         "process_instance_id": body.process_instance_id,
         "target_node_id": body.target_node_id,
+        "input_parameter": body.input_parameter,
         "final_activity": body.final_activity,
         "finalized_artifact": body.finalized_artifact,
+        "user_validation_required": body.user_validation_required,
         "data_sources": [row.model_dump() for row in body.subtasks],
     }
     return json.dumps(metadata_object, ensure_ascii=False)
@@ -112,9 +139,11 @@ def _build_kickoff_inputs(body: DelegatePlanningRequest) -> dict[str, str]:
 
 def _persist_node_metadata(body: DelegatePlanningRequest) -> dict[str, Any]:
     payload = {
+        "input_parameter": body.input_parameter,
         "data_sources": [row.model_dump() for row in body.subtasks],
         "output_end_product": body.finalized_artifact,
         "final_activity": body.final_activity,
+        "user_validation_required": body.user_validation_required,
     }
     with db.get_conn() as conn:
         if ingestion.get_graph(conn, body.process_instance_id) is None:

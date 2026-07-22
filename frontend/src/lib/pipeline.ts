@@ -1,4 +1,4 @@
-import type { AggregatedPipeline, GraphNode, ProcessGraph } from "../api";
+import type { AggregatedPipeline, DataSourceProcedure, GraphNode, ProcessGraph } from "../api";
 
 export function aggregatePipelineFromGraph(
   graph: ProcessGraph,
@@ -34,7 +34,8 @@ function harvestNodeMetadata(
 ) {
   for (const entry of node.metadata.data_sources ?? []) {
     const sourceName = entry.source_name.trim();
-    const procedure = entry.human_procedure.trim();
+    const legacy = entry as DataSourceProcedure & { human_procedure?: string };
+    const procedure = (legacy.user_procedure || legacy.human_procedure || "").trim();
     if (!sourceName && !procedure) continue;
     const key = sourceName || "(unnamed source)";
     const bucket = sourcesMap.get(key) ?? [];

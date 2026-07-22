@@ -158,7 +158,7 @@ def _pipeline_score(metadata: dict[str, Any]) -> int:
         1
         for entry in sources
         if isinstance(entry, dict)
-        and (str(entry.get("source_name") or "").strip() or str(entry.get("human_procedure") or "").strip())
+        and (str(entry.get("source_name") or "").strip() or str(entry.get("user_procedure") or entry.get("human_procedure") or "").strip())
     )
     if str(metadata.get("output_end_product") or "").strip():
         score += 1
