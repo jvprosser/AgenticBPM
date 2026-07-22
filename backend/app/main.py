@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from . import config, db, analytics, delegate_planning, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
+from . import config, db, analytics, claim_execution, delegate_planning, discovery, groups, ingestion, metadata as metadata_svc, overrides, suggest
 from .schemas.metadata import GroupMetadata, NodeTaskMetadata
 
 config.ensure_dirs()
@@ -337,6 +337,84 @@ async def delegate_planning_poll_route(
         status = 502 if str(result.get("detail", "")).startswith("gateway_") else 400
         return JSONResponse(status_code=status, content=result)
     return result
+
+
+class ClaimRunRequest(BaseModel):
+    process_id: str
+    target_node_id: str
+    claim_number: str
+    claim_parameters: dict = {}
+
+
+class SubtaskActionRequest(BaseModel):
+    validation_feedback: Optional[str] = None
+
+
+@app.get("/api/processes/{process_id}/claims", tags=["execution"])
+def list_process_claims(process_id: str, node_id: Optional[str] = None) -> dict:
+    with db.get_conn() as conn:
+        if ingestion.get_graph(conn, process_id) is None:
+            raise HTTPException(status_code=404, detail="Process not found.")
+        claims = claim_execution.list_claim_instances(conn, process_id, target_node_id=node_id)
+    return {"claims": [claim.model_dump() for claim in claims]}
+
+
+@app.get("/api/claims/{claim_id}", tags=["execution"])
+def get_claim(claim_id: str) -> dict:
+    try:
+        with db.get_conn() as conn:
+            return claim_execution.get_claim_detail(conn, claim_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/claims/run", tags=["execution"])
+def run_claim(body: ClaimRunRequest) -> dict:
+    try:
+        with db.get_conn() as conn:
+            if ingestion.get_graph(conn, body.process_id) is None:
+                raise HTTPException(status_code=404, detail="Process not found.")
+            return claim_execution.run_claim_for_node(
+                conn,
+                body.process_id,
+                body.target_node_id,
+                body.claim_number,
+                body.claim_parameters,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/artifacts/{execution_id}", tags=["execution"])
+def get_artifact(execution_id: str) -> dict:
+    try:
+        with db.get_conn() as conn:
+            payload = claim_execution.read_execution_artifact(conn, execution_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"execution_id": execution_id, "artifact": payload}
+
+
+@app.post("/api/subtasks/{execution_id}/approve", tags=["execution"])
+def approve_subtask(execution_id: str, body: SubtaskActionRequest) -> dict:
+    try:
+        with db.get_conn() as conn:
+            return claim_execution.approve_subtask_execution(
+                conn, execution_id, body.validation_feedback
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/subtasks/{execution_id}/reject", tags=["execution"])
+def reject_subtask(execution_id: str, body: SubtaskActionRequest) -> dict:
+    try:
+        with db.get_conn() as conn:
+            return claim_execution.reject_subtask_execution(
+                conn, execution_id, body.validation_feedback
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # --- Static frontend (served only when a build exists) -----------------------

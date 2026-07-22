@@ -34,10 +34,15 @@ export interface UploadResult {
 }
 
 export interface DataSourceProcedure {
+  subtask_id?: string;
   source_name: string;
   user_procedure: string;
   data_destinations: string;
   is_intermediate: boolean;
+  execution_mode?: "agent_automated" | "user_manual" | string;
+  agent_endpoint_key?: string;
+  input_parameter_mappings?: Record<string, string>;
+  artifact_path_pattern?: string;
   qualified_name?: string;
   destination?: string;
 }
@@ -362,5 +367,119 @@ export async function upsertMetadata(
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await parseError(res, "Failed to save metadata"));
+  return res.json();
+}
+
+export type ClaimInstanceStatus =
+  | "INITIATED"
+  | "PROCESSING"
+  | "AWAITING_USER_VALIDATION"
+  | "COMPLETED"
+  | "FAILED";
+
+export type SubtaskExecutionStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "AWAITING_USER_VALIDATION"
+  | "APPROVED"
+  | "FAILED";
+
+export interface ClaimInstanceRecord {
+  id: string;
+  claim_number: string;
+  process_id: string;
+  claim_parameters: Record<string, unknown>;
+  status: ClaimInstanceStatus;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SubtaskExecutionRecord {
+  id: string;
+  claim_instance_id: string;
+  subtask_id: string;
+  subtask_name?: string | null;
+  status: SubtaskExecutionStatus;
+  trace_id?: string | null;
+  session_id?: string | null;
+  artifact_path?: string | null;
+  output_payload?: Record<string, unknown> | null;
+  validation_feedback?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ClaimDetailResponse {
+  claim: ClaimInstanceRecord;
+  subtask_executions: SubtaskExecutionRecord[];
+}
+
+export async function listProcessClaims(
+  processId: string,
+  nodeId: string
+): Promise<ClaimInstanceRecord[]> {
+  const params = new URLSearchParams({ node_id: nodeId });
+  const res = await fetch(`/api/processes/${processId}/claims?${params}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to load claim runs"));
+  const body = (await res.json()) as { claims: ClaimInstanceRecord[] };
+  return body.claims;
+}
+
+export async function getClaimDetail(claimId: string): Promise<ClaimDetailResponse> {
+  const res = await fetch(`/api/claims/${claimId}`, { credentials: "include" });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to load claim detail"));
+  return res.json();
+}
+
+export async function runClaim(body: {
+  process_id: string;
+  target_node_id: string;
+  claim_number: string;
+  claim_parameters: Record<string, string>;
+}): Promise<ClaimDetailResponse> {
+  const res = await fetch("/api/claims/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to start claim run"));
+  return res.json();
+}
+
+export async function fetchExecutionArtifact(executionId: string): Promise<unknown> {
+  const res = await fetch(`/api/artifacts/${executionId}`, { credentials: "include" });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to load artifact"));
+  const body = (await res.json()) as { artifact: unknown };
+  return body.artifact;
+}
+
+export async function approveSubtaskExecution(
+  executionId: string,
+  validationFeedback: string
+): Promise<ClaimDetailResponse> {
+  const res = await fetch(`/api/subtasks/${executionId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ validation_feedback: validationFeedback }),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to approve subtask"));
+  return res.json();
+}
+
+export async function rejectSubtaskExecution(
+  executionId: string,
+  validationFeedback: string
+): Promise<ClaimDetailResponse> {
+  const res = await fetch(`/api/subtasks/${executionId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ validation_feedback: validationFeedback }),
+  });
+  if (!res.ok) throw new Error(await parseError(res, "Failed to reject subtask"));
   return res.json();
 }

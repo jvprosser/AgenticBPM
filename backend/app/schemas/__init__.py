@@ -4,8 +4,22 @@ from .agent_studio import (
     Task,
     validate_workflow_oracle,
 )
-from .metadata import DataSourceProcedure, GroupMetadata, NodeTaskMetadata
-from .metadata import AggregatedPipeline, AggregatedPipelineSource, AggregatedPipelineTask
+from .metadata import (
+    AggregatedPipeline,
+    AggregatedPipelineSource,
+    AggregatedPipelineTask,
+    DataSourceProcedure,
+    GroupMetadata,
+    NodeMetadataModel,
+    NodeTaskMetadata,
+    SubtaskItem,
+)
+from .execution import (
+    ClaimInstance,
+    ClaimInstanceCreate,
+    SubtaskExecution,
+    SubtaskExecutionCreate,
+)
 
 __all__ = [
     "Agent",
@@ -13,9 +27,15 @@ __all__ = [
     "AggregatedPipeline",
     "AggregatedPipelineSource",
     "AggregatedPipelineTask",
+    "ClaimInstance",
+    "ClaimInstanceCreate",
     "DataSourceProcedure",
     "GroupMetadata",
+    "NodeMetadataModel",
     "NodeTaskMetadata",
+    "SubtaskExecution",
+    "SubtaskExecutionCreate",
+    "SubtaskItem",
     "Task",
     "validate_workflow_oracle",
 ]

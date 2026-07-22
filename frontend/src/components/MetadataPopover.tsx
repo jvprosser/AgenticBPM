@@ -10,6 +10,9 @@ import {
   type NodeTaskMetadata,
 } from "../api";
 import AssistantGroupPopover from "./AssistantGroupPopover";
+import ExecutionCockpit from "./execution/ExecutionCockpit";
+import TaskModeSwitcher from "./execution/TaskModeSwitcher";
+import type { TaskViewMode } from "./execution/types";
 
 const DEBOUNCE_MS = 400;
 const TASK_EDITOR_WIDTH_PX = 600;
@@ -170,11 +173,20 @@ function formatDelegateFinalResult(value: unknown): string {
 }
 
 function normalizeDataSource(row: DataSourceProcedure & { human_procedure?: string }): DataSourceProcedure {
+  const executionMode =
+    row.execution_mode === "user_manual" || row.execution_mode === "agent_automated"
+      ? row.execution_mode
+      : "agent_automated";
   return {
+    subtask_id: row.subtask_id ?? "",
     source_name: row.source_name ?? "",
     user_procedure: row.user_procedure ?? row.human_procedure ?? "",
     data_destinations: row.data_destinations ?? "",
     is_intermediate: row.is_intermediate ?? false,
+    execution_mode: executionMode,
+    agent_endpoint_key: row.agent_endpoint_key ?? "",
+    input_parameter_mappings: row.input_parameter_mappings ?? {},
+    artifact_path_pattern: row.artifact_path_pattern ?? "",
     qualified_name: row.qualified_name ?? "",
     destination: row.destination ?? "",
   };
@@ -204,6 +216,7 @@ export default function MetadataPopover({
   onRejectProposal,
 }: Props) {
   const [nodeForm, setNodeForm] = useState<NodeTaskMetadata>(normalizeNodeInitial(initial));
+  const [viewMode, setViewMode] = useState<TaskViewMode>("authoring");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [delegateBusy, setDelegateBusy] = useState(false);
   const [delegateDialog, setDelegateDialog] = useState<DelegateDialogState | null>(null);
@@ -216,6 +229,7 @@ export default function MetadataPopover({
     latestNode.current = nextNode;
     setSaveState("idle");
     setDelegateDialog(null);
+    setViewMode("authoring");
   }, [target?.ownerId, target?.ownerType]);
 
   useEffect(() => {
@@ -296,6 +310,7 @@ export default function MetadataPopover({
             user_procedure: "",
             data_destinations: "",
             is_intermediate: false,
+            execution_mode: "agent_automated",
           },
         ],
       }),
@@ -514,16 +529,29 @@ export default function MetadataPopover({
       ) : (
         <>
           <div className="metadata-popover__header">
-            <h3>{target.title}</h3>
+            <div className="metadata-popover__header-main">
+              <h3>{target.title}</h3>
+              <TaskModeSwitcher mode={viewMode} onChange={setViewMode} />
+            </div>
             <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
               ×
             </button>
           </div>
           <p className="metadata-popover__hint">
-            Break down inbound data sources, user verification routines, and outputs. Changes
-            save automatically.
+            {viewMode === "authoring"
+              ? "Design subtasks, execution parameters, and outputs. Changes save automatically."
+              : "Launch claim runs, monitor subtask statuses, inspect artifacts, and approve validation gates."}
           </p>
 
+          {viewMode === "execution" ? (
+            <ExecutionCockpit
+              processId={processId}
+              nodeId={target.ownerId}
+              inputParameter={nodeForm.input_parameter}
+              subtasks={nodeForm.data_sources}
+            />
+          ) : (
+            <>
           <section className="metadata-section">
             <label className="metadata-field">
               <span>Primary Input Parameter (e.g. Claim ID, Policy Number, File Path):</span>
@@ -592,6 +620,18 @@ export default function MetadataPopover({
                               </code>
                             </div>
                           ) : null}
+                          <label className="metadata-field">
+                            <span>Execution Mode</span>
+                            <select
+                              value={row.execution_mode ?? "agent_automated"}
+                              onChange={(e) =>
+                                updateSourceRow(index, "execution_mode", e.target.value)
+                              }
+                            >
+                              <option value="agent_automated">Agent Automated</option>
+                              <option value="user_manual">User Manual</option>
+                            </select>
+                          </label>
                           <label className="metadata-field metadata-field--checkbox">
                             <input
                               type="checkbox"
@@ -690,6 +730,8 @@ export default function MetadataPopover({
           <p className={`metadata-popover__status metadata-popover__status--${saveState}`}>
             {statusLabel}
           </p>
+            </>
+          )}
         </>
       )}
     </aside>

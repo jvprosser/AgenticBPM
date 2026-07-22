@@ -87,9 +87,50 @@ CREATE TABLE IF NOT EXISTS strategic_override (
     FOREIGN KEY (process_id) REFERENCES process(id)
 );
 
+CREATE TABLE IF NOT EXISTS claim_instance (
+    id                      TEXT PRIMARY KEY,
+    claim_number            TEXT NOT NULL,
+    process_id              TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    claim_parameters_json   TEXT,
+    status                  TEXT NOT NULL DEFAULT 'INITIATED'
+        CHECK (status IN (
+            'INITIATED',
+            'PROCESSING',
+            'AWAITING_USER_VALIDATION',
+            'COMPLETED',
+            'FAILED'
+        )),
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS subtask_execution (
+    id                      TEXT PRIMARY KEY,
+    claim_instance_id       TEXT NOT NULL REFERENCES claim_instance(id) ON DELETE CASCADE,
+    subtask_id              TEXT NOT NULL,
+    subtask_name            TEXT,
+    status                  TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN (
+            'PENDING',
+            'RUNNING',
+            'AWAITING_USER_VALIDATION',
+            'APPROVED',
+            'FAILED'
+        )),
+    trace_id                TEXT,
+    session_id              TEXT,
+    artifact_path           TEXT,
+    output_payload_json     TEXT,
+    validation_feedback     TEXT,
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_node_process ON node(process_id);
 CREATE INDEX IF NOT EXISTS idx_edge_process ON edge(process_id);
 CREATE INDEX IF NOT EXISTS idx_lane_process ON lane(process_id);
+CREATE INDEX IF NOT EXISTS idx_claim_instance_process ON claim_instance(process_id);
+CREATE INDEX IF NOT EXISTS idx_subtask_execution_claim ON subtask_execution(claim_instance_id);
 """
 
 
